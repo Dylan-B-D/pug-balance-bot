@@ -19,7 +19,7 @@ import json
 import random
 import matplotlib.pyplot as plt
 
-TOKEN = 'MTE1NDM3MjQwMTcxOTY4NTIyMQ.Guf73B.21HnFoy5Ac5axw3wNjfglZMkXal2uquC_YIDCE'
+TOKEN = 'BOT_TOKEN'
 MIN_REACTIONS = 5
 MIN_REACTIONS_MAP = 7
 
