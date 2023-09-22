@@ -18,6 +18,10 @@ TOKEN = 'BOT_TOKEN'
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+most_recent_matched_ids = {}
+matched_results_store = {}
+substitution_store = {}
+
 def fetch_data(start_date, end_date, queue):
     if queue == '2v2':
         urls = ['https://sh4z.se/pugstats/naTA.json']
@@ -272,16 +276,76 @@ def count_games_for_ids(data, matched_ids):
 async def on_ready():
     print(f'We have logged in as {bot.user}')
 
+async def handle_substitution(message, start_date, end_date):
+    # Extract player names from the substitution message
+    player_names = re.findall(r'`([^`]+) has been substituted with ([^`]+)`', message.content)
+    if not player_names:
+        return  # Exit if no player names were found
+
+    # Fetching ids for both the old and the new player
+    old_player_name, new_player_name = player_names[0]
+    old_player_id = get_user_id_by_name(message.guild, old_player_name)
+    new_player_id = get_user_id_by_name(message.guild, new_player_name)
+
+    embed_description = f"{old_player_name} ({old_player_id if old_player_id else 'Unknown'}) has been substituted with {new_player_name} ({new_player_id if new_player_id else 'Unknown'})"
+    substitution_store[message.channel.id] = embed_description
+
+    channel_id = message.channel.id
+    if channel_id in most_recent_matched_ids:
+        matched_results = most_recent_matched_ids[channel_id]
+        matched_ids = matched_results.get('matched_ids', [])
+        captains = matched_results.get('captains', [])
+
+        # Replace the old_player_id with new_player_id in the list of matched_ids
+        for index, user_id_str in enumerate(matched_ids):
+            user_id = int(user_id_str) if isinstance(user_id_str, int) else int(re.search(r'\((\d+)\)', user_id_str).group(1))
+            if user_id == old_player_id:
+                matched_ids[index] = f"{new_player_name} ({new_player_id})"
+                break
+
+        # If the substituted player was a captain, then the new player should also be a captain.
+        for index, user_id_str in enumerate(captains):
+            user_id = int(user_id_str) if isinstance(user_id_str, int) else int(re.search(r'\((\d+)\)', user_id_str).group(1))
+            if user_id == old_player_id:
+                captains[index] = new_player_id  # replaced with the new player’s ID as an integer
+                break
+        
+        # Update the stored matched_results with the modified matched_ids and captains
+        matched_results['matched_ids'] = matched_ids
+        matched_results['captains'] = captains
+        most_recent_matched_ids[channel_id] = matched_results
+
+
+        # Retrieve the required data again and create a new balanced match embed
+        data = fetch_data(start_date, end_date, 'NA')
+        player_ratings, _, _, _ = calculate_ratings(data, queue='NA')
+        players = []
+        for user_id_str in matched_ids + matched_results.get('matched_strings', []):
+            user_id = int(re.search(r'\((\d+)\)', user_id_str).group(1))
+            name = player_name_mapping.get(user_id)
+            if not name:
+                member = message.channel.guild.get_member(user_id)
+                name = member.display_name if member else str(user_id)
+            default_rating = trueskill.Rating(mu=15, sigma=5)
+            players.append({'id': user_id, 'name': name, 'mu': player_ratings.get(user_id, default_rating).mu})
+
+        await send_balanced_teams(message.channel, players, player_ratings, captains)
+
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
+
+    end_date = datetime.now()
+    start_date = datetime(2018, 1, 1)
+
+    if message.content.startswith("`") and " has been substituted with " in message.content and message.content.endswith("`"):
+        await handle_substitution(message, start_date, end_date)
+
 
     if message.embeds:
         embed = message.embeds[0]
         # Check if 'Captains:' is in the embed description instead of the title
         if embed.description and "Captains:" in embed.description:
-            end_date = datetime.now()
-            start_date = datetime(2018, 1, 1)
             data = fetch_data(start_date, end_date, 'NA')
             player_ratings, _, _, _ = calculate_ratings(data, queue='NA')
             matched_results = await match_ids(message.channel, embed)
@@ -305,7 +369,7 @@ async def on_message(message):
                 players.append({'id': user_id, 'name': name, 'mu': player_ratings.get(user_id, default_rating).mu})
 
 
-            await send_match_results(message.channel, matched_results)
+            matched_results_store[message.channel.id] = matched_results
             # await send_player_info(message.channel, matched_results['matched_ids'] + matched_results['matched_strings'], data, player_ratings, player_name_mapping)
             await send_balanced_teams(message.channel, players, player_ratings, captains)
 
@@ -327,6 +391,7 @@ async def getids(channel, embed):
 
 
 async def match_ids(channel, embed):
+    global most_recent_matched_ids
     matched_ids = []
     matched_strings = []
     unmatched_names = []
@@ -383,7 +448,102 @@ async def match_ids(channel, embed):
         'unmatched_names': unmatched_names,
         'captains': captains
     }
+    most_recent_matched_ids[channel.id] = matched_results
     return matched_results
+
+
+async def send_balanced_teams(channel, players, player_ratings, captains):
+    try:
+        balanced_teams = balance_teams(players, captains)
+        
+        team1 = balanced_teams['team1']
+        team2 = balanced_teams['team2']
+        
+        def format_names(team):
+            names = []
+            # Sort team members by their ratings (mu value), highest first, but keep captain first.
+            team = sorted(
+                team,
+                key=lambda player: (
+                    player['id'] not in captains,  
+                    -(player_ratings.get(player['id']).mu if player_ratings.get(player['id']) else 0) 
+                )
+            )
+            for player in team:
+                name = player['name']
+                if player['id'] in captains:
+                    name = f"**(c)** {name}"  
+                names.append(name)
+            return names
+
+        
+        team1_names = format_names(team1)
+        team2_names = format_names(team2)
+        
+        default_rating = trueskill.Rating(mu=15, sigma=5)
+        team1_ratings = [player_ratings.get(player['id'], default_rating) for player in team1]
+        team2_ratings = [player_ratings.get(player['id'], default_rating) for player in team2]
+
+        
+        win_prob_team1 = win_probability(team1_ratings, team2_ratings)
+        
+        balanced_teams_embed = Embed(title='Balanced Teams', colour=Colour.green())
+        
+        # Set inline to True to make fields appear side by side
+        balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
+        balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)  # This acts as a spacer.
+        balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
+
+        balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
+        
+        await channel.send(embed=balanced_teams_embed)
+
+    
+    except Exception as e:
+        print(f"Error in sending balanced teams info: {e}")
+
+
+
+
+def get_user_id_by_name(guild, username):
+    member = discord.utils.get(guild.members, name=username) or discord.utils.get(guild.members, display_name=username)
+    if member:
+        return member.id
+    return None
+
+
+@bot.command()
+async def match(ctx):
+    embed = discord.Embed(
+        title="",
+        description="**Captains: <@140028568062263296> & <@252190261734670336>**\n"
+                    "crodog5, karucieldemonio, mikesters17, Nerve, cjplayz_, rockstaruniverse, "
+                    "Dodge, gratismatt, grethsc, frogkabobs, jacktheblack, vorpalkitty",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def sub(ctx):
+    await ctx.send("`solly has been substituted with theobaldthebird`")
+
+@bot.command(name='debug')
+async def debug(ctx):
+    channel_id = ctx.channel.id
+    
+    # Send the substitution embed if available
+    embed_description = substitution_store.get(channel_id)
+    if embed_description:
+        embed = discord.Embed(description=embed_description, color=discord.Color.blue())
+        await ctx.channel.send(embed=embed)
+    
+    # Send the matched_results if available
+    matched_results = matched_results_store.get(channel_id)
+    if matched_results:
+        await send_match_results(ctx.channel, matched_results)
+    else:
+        await ctx.channel.send("No matched results found for this channel.")
 
 
 
@@ -442,79 +602,5 @@ async def send_player_info(channel, matched_ids, data, player_ratings, player_na
 
     except Exception as e:
         print(f"Error in sending player info: {e}")
-
-
-
-async def send_balanced_teams(channel, players, player_ratings, captains):
-    try:
-        balanced_teams = balance_teams(players, captains)
-        
-        team1 = balanced_teams['team1']
-        team2 = balanced_teams['team2']
-        
-        def format_names(team):
-            names = []
-            # Sort team members by their ratings (mu value), highest first, but keep captain first.
-            team = sorted(
-                team,
-                key=lambda player: (
-                    player['id'] not in captains,  
-                    -(player_ratings.get(player['id']).mu if player_ratings.get(player['id']) else 0) 
-                )
-            )
-            for player in team:
-                name = player['name']
-                if player['id'] in captains:
-                    name = f"**(c)** {name}"  
-                names.append(name)
-            return names
-
-        
-        team1_names = format_names(team1)
-        team2_names = format_names(team2)
-        
-        default_rating = trueskill.Rating(mu=15, sigma=5)
-        team1_ratings = [player_ratings.get(player['id'], default_rating) for player in team1]
-        team2_ratings = [player_ratings.get(player['id'], default_rating) for player in team2]
-
-        
-        win_prob_team1 = win_probability(team1_ratings, team2_ratings)
-        
-        balanced_teams_embed = Embed(title='Balanced Teams', colour=Colour.purple())
-        
-        # Set inline to True to make fields appear side by side
-        balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
-        balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)  # This acts as a spacer.
-        balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
-
-        balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
-        
-        await channel.send(embed=balanced_teams_embed)
-
-    
-    except Exception as e:
-        print(f"Error in sending balanced teams info: {e}")
-
-
-
-
-def get_user_id_by_name(guild, username):
-    member = discord.utils.get(guild.members, name=username) or discord.utils.get(guild.members, display_name=username)
-    if member:
-        return member.id
-    return None
-
-
-@bot.command()
-async def match(ctx):
-    embed = discord.Embed(
-        title="",
-        description="**Captains: <@140028568062263296> & <@252190261734670336>**\n"
-                    "crodog5, karucieldemonio, mikesters17, Nerve, cjplayz_, rockstaruniverse, "
-                    "Dodge, gratismatt, grethsc, frogkabobs, jacktheblack, vorpalkitty",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
-
 
 bot.run(TOKEN)
