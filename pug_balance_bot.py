@@ -161,6 +161,12 @@ def calculate_ratings(game_data, queue='NA'):
 
     # Initialize ratings
     player_ratings = {}
+    
+    # Initialize default ratings for all players
+    for player_id in all_player_ids:
+        player_ratings[player_id] = default_rating = trueskill.Rating(mu=15, sigma=5)
+    
+    # Now adjust ratings for players who have played matches
     for player_id, avg_pick in player_avg_picks.items():
         if queue != '2v2':
             mu = ts.mu + mu_bonus(avg_pick)
@@ -217,28 +223,37 @@ def calculate_ratings(game_data, queue='NA'):
 
 
 def generate_combinations(players, team_size):
+    if team_size <= 0:
+        return [[]]
     return list(combinations(players, team_size))
 
-def balance_teams(players):
+def balance_teams(players, captains):
     best_difference = float('inf')
     best_team1 = []
     best_team2 = []
     
+    # Separate players into locked and unlocked, and assign captains to their respective locked teams
+    locked_team1_players = [player for player in players if player['id'] == captains[0]]
+    locked_team2_players = [player for player in players if player['id'] == captains[1]]
+    unlocked_players = [player for player in players if player not in locked_team1_players + locked_team2_players]
+    
     max_team_size = min(7, len(players) // 2)
-    for team_size in range(1, max_team_size + 1):
-        team1_combinations = generate_combinations(players, team_size)
+    
+    for team_size in range(len(locked_team1_players), max_team_size + 1):
+        team1_combinations = generate_combinations(unlocked_players, team_size - len(locked_team1_players))
         
-        for team1 in team1_combinations:
-            team2 = [player for player in players if player not in team1]
+        for team1_unlocked in team1_combinations:
+            full_team1 = locked_team1_players + list(team1_unlocked)
+            team2 = locked_team2_players + [player for player in unlocked_players if player not in team1_unlocked]
             
-            if abs(len(team1) - len(team2)) > 1:
+            if abs(len(full_team1) - len(team2)) > 1:
                 continue
             
-            difference = abs(sum(player['mu'] for player in team1) - sum(player['mu'] for player in team2))
+            difference = abs(sum(player['mu'] for player in full_team1) - sum(player['mu'] for player in team2))
             
             if difference < best_difference:
                 best_difference = difference
-                best_team1 = list(team1)
+                best_team1 = full_team1
                 best_team2 = team2
                 
     return {'team1': best_team1, 'team2': best_team2}
@@ -260,21 +275,23 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
-    
+
     if message.embeds:
         embed = message.embeds[0]
-        if "Captains:" in embed.title:
+        # Check if 'Captains:' is in the embed description instead of the title
+        if embed.description and "Captains:" in embed.description:
             end_date = datetime.now()
             start_date = datetime(2018, 1, 1)
             data = fetch_data(start_date, end_date, 'NA')
             player_ratings, _, _, _ = calculate_ratings(data, queue='NA')
-            matched_results = await getids(message.channel, embed)
+            matched_results = await match_ids(message.channel, embed)
+            captains = matched_results.get('captains', [])
 
             matched_ids = matched_results.get('matched_ids', []) + matched_results.get('matched_strings', [])
             if not matched_ids:
                 print("No matched IDs found.")
                 return
-            
+
             players = []
             for user_id_str in matched_ids:
                 user_id = int(re.search(r'\((\d+)\)', user_id_str).group(1))
@@ -283,12 +300,15 @@ async def on_message(message):
                 if not name:
                     member = message.channel.guild.get_member(user_id)
                     name = member.display_name if member else str(user_id)
-                
-                players.append({'id': user_id, 'name': name, 'mu': player_ratings.get(user_id).mu})
+
+                default_rating = trueskill.Rating(mu=15, sigma=5)
+                players.append({'id': user_id, 'name': name, 'mu': player_ratings.get(user_id, default_rating).mu})
+
 
             await send_match_results(message.channel, matched_results)
-            await send_player_info(message.channel, matched_results['matched_ids'] + matched_results['matched_strings'], data, player_ratings, player_name_mapping)    
-            await send_balanced_teams(message.channel, players, player_ratings)
+            # await send_player_info(message.channel, matched_results['matched_ids'] + matched_results['matched_strings'], data, player_ratings, player_name_mapping)
+            await send_balanced_teams(message.channel, players, player_ratings, captains)
+
 
 
 
@@ -310,57 +330,91 @@ async def match_ids(channel, embed):
     matched_ids = []
     matched_strings = []
     unmatched_names = []
+    captains = []
     
-    regex_split = re.compile(r'@|&|,')
-    regex_prefix = re.compile(r'Captains: @')
+    regex_split = re.compile(r'[,&\s]+')
+    regex_mention = re.compile(r'<@(\d+)>')
     
-    title_words = set(word.strip(' &@,') for word in regex_split.split(embed.title) if word.strip(' &@,'))
-    description_words = set(word.strip(' &@,') for word in regex_split.split(embed.description) if word.strip(' &@,'))
+    content_string = embed.description
     
-    all_words = title_words | description_words
-    content_string = regex_prefix.sub('', embed.title + " " + embed.description)
+    # Extract captains and their ids
+    captains_section = re.search(r'Captains:.*?\n', content_string)
+    if captains_section:
+        for mention in regex_mention.findall(captains_section.group()):
+            captains.append(int(mention))
+
+    captains_string = re.search(r'Captains: ([^&]+&[^&]+)', content_string)
+    if captains_string:
+        captains_string = captains_string.group(1)
+        for mention in regex_mention.findall(captains_string):
+            member = channel.guild.get_member(int(mention))
+            if member:
+                user_id_string = f"{member.display_name} ({mention})"
+                matched_ids.append(user_id_string)
+                content_string = content_string.replace(f'<@{mention}>', '')
+                
     
-    # Remove single occurrence of "& @" from the content_string
-    if content_string.count('& @') == 1:
-        content_string = content_string.replace('& @', '', 1)
+    content_string = content_string.replace('Captains:', '').strip()
+    description_words = set(word.strip(' &@,') for word in regex_split.split(content_string) if word.strip(' &@,'))
     
     members_names = {member.display_name: member.id for member in channel.guild.members}
     
-    for word in all_words:
+    # Match by names in the list of words extracted from content_string
+    for word in description_words:
         user_id = get_user_id_by_name(channel.guild, word)
-        if user_id:
+        if user_id and f"{word} ({user_id})" not in matched_ids:
             matched_ids.append(f"{word} ({user_id})")
             content_string = content_string.replace(word, '', 1)
-    
+            
+    # Match by substring
     for name, member_id in members_names.items():
-        if name in content_string:
+        if name in content_string and f"{name} ({member_id})" not in matched_ids:
             matched_strings.append(f"{name} ({member_id})")
             content_string = content_string.replace(name, '', 1)
-    
-    if content_string.strip():
-        unmatched_names.append(content_string.strip())
-    
+            
+    # Find unmatched names
+    for word in regex_split.split(content_string.strip()):
+        if word and word not in ('&', '@'):
+            unmatched_names.append(word)
+            
     matched_results = {
         'matched_ids': matched_ids,
         'matched_strings': matched_strings,
-        'unmatched_names': unmatched_names
+        'unmatched_names': unmatched_names,
+        'captains': captains
     }
-    
     return matched_results
 
 
 
 async def send_match_results(channel, matched_results):
     result_embed = Embed(title='ID Matching', colour=0x3498db)
-    
+
     if matched_results['matched_ids']:
-        result_embed.add_field(name='Matched IDs:', value='\n'.join(matched_results['matched_ids']), inline=False)
+
+        half_len = (len(matched_results['matched_ids']) + 1) // 2  
+        first_half = matched_results['matched_ids'][:half_len]
+        second_half = matched_results['matched_ids'][half_len:]
+
+        while len(first_half) < len(second_half):
+            first_half.append('\u200B')
+        while len(second_half) < len(first_half):
+            second_half.append('\u200B')
+        
+        # Display the two columns
+        result_embed.add_field(name='Matched IDs:', value='\n'.join(first_half) or '[Empty]', inline=True)
+        result_embed.add_field(name='\u200B', value='\u200B', inline=True)  # One blank column as a spacer
+        result_embed.add_field(name='Matched IDs:', value='\n'.join(second_half) or '[Empty]', inline=True)
+
     if matched_results['matched_strings']:
         result_embed.add_field(name='Matched IDs From Substring:', value='\n'.join(matched_results['matched_strings']), inline=False)
+        
     if matched_results['unmatched_names']:
         result_embed.add_field(name='Unmatched Names:', value='\n'.join(matched_results['unmatched_names']), inline=False)
-    
+
     await channel.send(embed=result_embed)
+
+
 
 
 
@@ -391,31 +445,56 @@ async def send_player_info(channel, matched_ids, data, player_ratings, player_na
 
 
 
-async def send_balanced_teams(channel, players, player_ratings):
+async def send_balanced_teams(channel, players, player_ratings, captains):
     try:
-        balanced_teams = balance_teams(players)
+        balanced_teams = balance_teams(players, captains)
         
         team1 = balanced_teams['team1']
         team2 = balanced_teams['team2']
         
-        team1_names = [player['name'] for player in team1]
-        team2_names = [player['name'] for player in team2]
+        def format_names(team):
+            names = []
+            # Sort team members by their ratings (mu value), highest first, but keep captain first.
+            team = sorted(
+                team,
+                key=lambda player: (
+                    player['id'] not in captains,  
+                    -(player_ratings.get(player['id']).mu if player_ratings.get(player['id']) else 0) 
+                )
+            )
+            for player in team:
+                name = player['name']
+                if player['id'] in captains:
+                    name = f"**(c)** {name}"  
+                names.append(name)
+            return names
+
         
-        team1_ratings = [player_ratings.get(player['id']) for player in team1]
-        team2_ratings = [player_ratings.get(player['id']) for player in team2]
+        team1_names = format_names(team1)
+        team2_names = format_names(team2)
+        
+        default_rating = trueskill.Rating(mu=15, sigma=5)
+        team1_ratings = [player_ratings.get(player['id'], default_rating) for player in team1]
+        team2_ratings = [player_ratings.get(player['id'], default_rating) for player in team2]
+
         
         win_prob_team1 = win_probability(team1_ratings, team2_ratings)
         
         balanced_teams_embed = Embed(title='Balanced Teams', colour=Colour.purple())
         
-        balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=False)
-        balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=False)
+        # Set inline to True to make fields appear side by side
+        balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
+        balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)  # This acts as a spacer.
+        balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
+
         balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
         
         await channel.send(embed=balanced_teams_embed)
+
     
     except Exception as e:
         print(f"Error in sending balanced teams info: {e}")
+
 
 
 
@@ -428,9 +507,14 @@ def get_user_id_by_name(guild, username):
 
 @bot.command()
 async def match(ctx):
-    embed = discord.Embed(title="Captains: @a,.asd,,. (&^@@fsd*(& & @Iced",
-                          description="Solly no mixer, A, DJ(roam, maybe), _legend._v, n8 nomic (cap/snipe), Mike (O plz), freefood, Vorpalkitty, Tendy, Blu2th (Snipe Intern), [<3] Jive (bans arx, kata, dx), CJ",
-                          color=discord.Color.green())
+    embed = discord.Embed(
+        title="",
+        description="**Captains: <@140028568062263296> & <@252190261734670336>**\n"
+                    "crodog5, karucieldemonio, mikesters17, Nerve, cjplayz_, rockstaruniverse, "
+                    "Dodge, gratismatt, grethsc, frogkabobs, jacktheblack, vorpalkitty",
+        color=discord.Color.green()
+    )
     await ctx.send(embed=embed)
+
 
 bot.run(TOKEN)
