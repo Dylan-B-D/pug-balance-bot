@@ -5,15 +5,23 @@ import re
 import json
 import requests
 from datetime import datetime
-from player_mappings import player_name_mapping
+from data_mappings.player_mappings import player_name_mapping
+from data_mappings.map_name_mapping import map_name_mapping
+from data_mappings.map_url_mapping import map_url_mapping
 import trueskill
 from math import erf, sqrt
 from scipy.special import logit
 import itertools
 import math
 from itertools import combinations
+from queue import PriorityQueue
+import json
+import random
+import matplotlib.pyplot as plt
 
-TOKEN = 'BOT_TOKEN'
+TOKEN = 'MTE1NDM3MjQwMTcxOTY4NTIyMQ.Guf73B.21HnFoy5Ac5axw3wNjfglZMkXal2uquC_YIDCE'
+MIN_REACTIONS = 5
+MIN_REACTIONS_MAP = 7
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -21,6 +29,21 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 most_recent_matched_ids = {}
 matched_results_store = {}
 substitution_store = {}
+map_weights = {
+    "Dangerous Crossing": 24.95,
+    "Katabatic": 24.19,
+    "Arx Novena": 23.00,
+    "Oceanus": 8.00,
+    "Tartarus": 6.56,
+    "Sunstar": 4.31,
+    "Drydock": 3.00,
+    "Blues": 3.00,
+    "Perma": 3.00,
+}
+
+maps, weights = zip(*map_weights.items())
+selected_map = random.choices(maps, weights, k=1)[0]
+
 
 def fetch_data(start_date, end_date, queue):
     if queue == '2v2':
@@ -232,11 +255,8 @@ def generate_combinations(players, team_size):
     return list(combinations(players, team_size))
 
 def balance_teams(players, captains):
-    best_difference = float('inf')
-    best_team1 = []
-    best_team2 = []
+    best_teams = PriorityQueue()
     
-    # Separate players into locked and unlocked, and assign captains to their respective locked teams
     locked_team1_players = [player for player in players if player['id'] == captains[0]]
     locked_team2_players = [player for player in players if player['id'] == captains[1]]
     unlocked_players = [player for player in players if player not in locked_team1_players + locked_team2_players]
@@ -255,12 +275,15 @@ def balance_teams(players, captains):
             
             difference = abs(sum(player['mu'] for player in full_team1) - sum(player['mu'] for player in team2))
             
-            if difference < best_difference:
-                best_difference = difference
-                best_team1 = full_team1
-                best_team2 = team2
+            # Negative difference because PriorityQueue is a min-heap and we want max difference at the top
+            if best_teams.qsize() < 5 or -difference > best_teams.queue[0][0]:
+                best_teams.put((-difference, {'team1': full_team1, 'team2': team2}))
                 
-    return {'team1': best_team1, 'team2': best_team2}
+                # If we have more than 5 items in the queue, remove the smallest one
+                if best_teams.qsize() > 5:
+                    best_teams.get()
+                    
+    return [best_teams.get()[1] for _ in range(min(5, best_teams.qsize()))][::-1]
 
 def count_games_for_ids(data, matched_ids):
     id_game_count = {id_: 0 for id_ in matched_ids}
@@ -454,10 +477,14 @@ async def match_ids(channel, embed):
 
 async def send_balanced_teams(channel, players, player_ratings, captains):
     try:
-        balanced_teams = balance_teams(players, captains)
+        balanced_teams_list = balance_teams(players, captains)
+        if not balanced_teams_list or len(balanced_teams_list) <= 1:
+            print("Could not find balanced teams.")
+            return
         
-        team1 = balanced_teams['team1']
-        team2 = balanced_teams['team2']
+        next_index = 1
+        
+        balanced_teams = balanced_teams_list[0]
         
         def format_names(team):
             names = []
@@ -477,33 +504,100 @@ async def send_balanced_teams(channel, players, player_ratings, captains):
             return names
 
         
-        team1_names = format_names(team1)
-        team2_names = format_names(team2)
+        def create_embed(balanced_teams, title='Balanced Teams', map_name='Unknown Map', map_url='https://i.ibb.co/QM564R3/arx.jpg', rebalance_reactions=0, skip_map_reactions=0):
+            team1_names = format_names(balanced_teams['team1'])
+            team2_names = format_names(balanced_teams['team2'])
+
+            default_rating = trueskill.Rating(mu=15, sigma=5)
+            team1_ratings = [player_ratings.get(player['id'], default_rating) for player in balanced_teams['team1']]
+            team2_ratings = [player_ratings.get(player['id'], default_rating) for player in balanced_teams['team2']]
+            
+            win_prob_team1 = win_probability(team1_ratings, team2_ratings)
+            
+            balanced_teams_embed = Embed(title=title, colour=Colour.green())
+            balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
+            balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)
+            balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
+            balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
+
+            if map_url:
+                balanced_teams_embed.set_thumbnail(url=map_url) 
+            balanced_teams_embed.add_field(name='Map', value=map_name, inline=False) 
+
+            return balanced_teams_embed
         
-        default_rating = trueskill.Rating(mu=15, sigma=5)
-        team1_ratings = [player_ratings.get(player['id'], default_rating) for player in team1]
-        team2_ratings = [player_ratings.get(player['id'], default_rating) for player in team2]
+        selected_map = random.choices(maps, weights, k=1)[0]
+        map_url = map_url_mapping.get(selected_map) 
+
+        msg = await channel.send(embed=create_embed(balanced_teams_list[0], map_name=selected_map, map_url=map_url))
+        await msg.add_reaction('🔁')
+        await msg.add_reaction('🗺️')
+        
+        def check(reaction, user):
+            return user != msg.author and str(reaction.emoji) in ['🔁', '🗺️'] and reaction.message.id == msg.id
 
         
-        win_prob_team1 = win_probability(team1_ratings, team2_ratings)
-        
-        balanced_teams_embed = Embed(title='Balanced Teams', colour=Colour.green())
-        
-        # Set inline to True to make fields appear side by side
-        balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
-        balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)  # This acts as a spacer.
-        balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
+        while next_index < len(balanced_teams_list):
+            reaction, user = await bot.wait_for('reaction_add', check=check)
+            emoji = str(reaction.emoji)
+            
+            if emoji == '🔁' and reaction.count >= MIN_REACTIONS:
+                balanced_teams = balanced_teams_list[next_index]
+                msg = await channel.send(embed=create_embed(balanced_teams, title=f'Rebalanced Teams #{next_index}', map_name=selected_map, map_url=map_url))
+                if next_index < len(balanced_teams_list) - 1:
+                    await msg.add_reaction('🔁')
+                await msg.add_reaction('🗺️')
+                next_index += 1
+            
+            elif emoji == '🗺️':
+                if reaction.count >= MIN_REACTIONS_MAP:
+                    available_maps = [map_ for map_ in maps if map_ != selected_map]  
+                    available_weights = [weights[maps.index(map_)] for map_ in available_maps]
 
-        balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
-        
-        await channel.send(embed=balanced_teams_embed)
+                    if not available_maps:  
+                        available_maps = maps
+                        available_weights = weights
+                        
+                    new_selected_map = random.choices(available_maps, available_weights, k=1)[0]
+                    new_map_url = map_url_mapping.get(new_selected_map)
 
-    
+                    if next_index == 1:
+                        title = 'Balanced Teams'
+                    else:
+                        title = f'Rebalanced Teams #{next_index - 1}'
+
+                    await msg.edit(embed=create_embed(balanced_teams, title=title, map_name=new_selected_map, map_url=new_map_url))
+                    selected_map = new_selected_map  
+
     except Exception as e:
         print(f"Error in sending balanced teams info: {e}")
 
 
-
+def create_map_weights_chart(map_weights):
+    map_names = list(map_weights.keys())
+    weights = list(map_weights.values())
+    
+    plt.figure(figsize=(10,6))
+    
+    plt.gca().set_facecolor('none')
+    
+    plt.barh(map_names, weights, color='skyblue')
+    
+    # Setting the color of the labels and title to white
+    plt.xlabel('Weights', color='white')
+    plt.title('Map Weights', color='white')
+    
+    # Changing the color of the ticks to white
+    plt.tick_params(axis='x', colors='white')
+    plt.tick_params(axis='y', colors='white')
+    
+    plt.gca().invert_yaxis()
+    
+    plt.tight_layout()
+    filename = "map_weights_chart.png"
+    plt.savefig(filename, facecolor='none')
+    plt.close()
+    return filename
 
 def get_user_id_by_name(guild, username):
     member = discord.utils.get(guild.members, name=username) or discord.utils.get(guild.members, display_name=username)
@@ -523,9 +617,29 @@ async def match(ctx):
     )
     await ctx.send(embed=embed)
 
+@bot.command(name='info')
+async def info(ctx):
+    filename = create_map_weights_chart(map_weights)
+
+    # Create a discord.File object
+    file = discord.File(filename, filename="map_weights_chart.png")
+    
+    embed = discord.Embed(title="Bot Information", description="Details about bot settings and configurations.", color=discord.Colour.blue())
+    
+    # Adding bot configuration info
+    embed.add_field(name="Votes Required to Rebalance Teams", value=str(MIN_REACTIONS), inline=False)
+    embed.add_field(name="Votes Required to Skip Map", value=str(MIN_REACTIONS_MAP), inline=False)
+    
+    # Set the image url to reference the attached file
+    embed.set_image(url="attachment://map_weights_chart.png")
+    
+    # Send the embed and the file
+    await ctx.send(file=file, embed=embed)
+
+
 
 @bot.command()
-async def sub(ctx):
+async def substituted(ctx):
     await ctx.send("`solly has been substituted with theobaldthebird`")
 
 @bot.command(name='debug')
