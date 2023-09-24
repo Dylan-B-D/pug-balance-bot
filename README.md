@@ -1,12 +1,15 @@
 # pug-balance-bot
 
 # Available commands
-1. debug - Shows debug info for matching IDs to a BullyBot game
-2. info - Shows info about map weightings for map selection and voting thresholds       
-3. match - Debug command to simulate a match
-4. servers - Shows servers on a given login server
-5. serverstats - Shows some basic stats from a bullybot data source
-6. setmap - Sets the game map based on a given id
+1. !debug   -  Admin-only command for debugging ID matching results for previous game.
+2. !info  -  Shows map weighting for generated games, and voting thresholds.
+3. !kill  -  Elevated-admin command to shutdown docker containers. Usage: !kill [container]
+4. !listadmins  -  Lists all the admins.
+5. !match -  Restricted command for simulating a game starting.
+6. !servers  -  Shows server list for 'PUG Login'.
+7. !serverstats  -  Gets some simple stats for the PUG queues.
+8. !setmap - Admin only command for setting the PUG/2v2 map. Returns list of map IDs if no parameter given. Usage: !setmap [map_id]
+9. !status - Shows server status for PUGs with no param, or shows status for Mixers with a param of '2'. Usage: !status [optional_server_index]
 
 ## Requirements
 
