@@ -42,6 +42,8 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+bot.remove_command('help')
+
 most_recent_matched_ids = {}
 matched_results_store = {}
 substitution_store = {}
@@ -56,7 +58,11 @@ map_weights = {
     "Blues": 3.00,
     "Perma": 3.00,
 }
-
+privileged_users = [
+    162786167765336064,
+    140028568062263296,
+    252190261734670336
+]
 bot_admins = [
     140028568062263296,
     162786167765336064,
@@ -705,10 +711,9 @@ async def match(ctx):
     # Specified user ID
     allowed_user_id = 252190261734670336
     
-    # Check the user ID of the command invoker
-    if ctx.author.id != allowed_user_id:
-        # If user ID does not match, send a message or simply return
-        await ctx.send("Oops... looks like you have run into a skill issue.")
+    if ctx.author.id not in allowed_user_id:
+        embed = Embed(title="Permission Denied", description="This command is restricted.", color=0xff0000)
+        await ctx.send(embed=embed)
         return
     
     # If user ID matches, execute the command
@@ -739,15 +744,54 @@ async def info(ctx):
     
     # Send the embed and the file
     await ctx.send(file=file, embed=embed)
+    
+@bot.command()
+async def kill(ctx, container: str = None):
+    # Only proceed if the author's ID is in the allowed list
+    if ctx.author.id not in privileged_users:
+        embed = Embed(title="Permission Denied", description="Elevated admin permissions required to execute this command.", color=0xff0000)
+        await ctx.send(embed=embed)
+        return
 
+    if container not in ["2v2", "pug", "all"]:
+        embed = Embed(title="Invalid Argument", description="Please specify a valid container to kill (`2v2`, `pug`, or `all`).", color=0xff0000)
+        await ctx.send(embed=embed)
+        return
+
+    containers_killed = []
+
+    # Connect to the remote server via SSH
+    try:
+        async with asyncssh.connect(config['SSH']['IP'], username=config['SSH']['Username'], password=config['SSH']['Password']) as conn:
+            if container == "2v2" or container == "all":
+                result_2v2 = await conn.run('docker kill taserver_2v2b_4')
+                if not result_2v2.stderr:
+                    containers_killed.append("2V2")
+            if container == "pug" or container == "all":
+                result_pug = await conn.run('docker kill PUGS')
+                if not result_pug.stderr:
+                    containers_killed.append("PUG")
+            
+            killed_containers_str = " and ".join(containers_killed)
+            user_id = ctx.author.id
+            user_name = player_name_mapping.get(user_id, str(ctx.author))  # Use the discord username as fallback
+            embed_title = f"{killed_containers_str} container{'s' if len(containers_killed) > 1 else ''} shut down successfully by {user_name}"
+            embed_description = f"Container{'s' if len(containers_killed) > 1 else ''} {killed_containers_str} have been shut down."
+            embed = Embed(title=embed_title, description=embed_description, color=0x00ff00)
+            await ctx.send(embed=embed)
+
+    except Exception as e:
+        embed = Embed(title="Error", description=f"Error shutting down containers: {e}", color=0xff0000)
+        await ctx.send(embed=embed)
+        
 @bot.command()
 async def setmap(ctx, map_shortcut: str = None):
     start_time = time.time()  # Start timer when the command is triggered
     print(f"Start Time: {start_time}")
     
-    # Check if the user is a bot admin
     if ctx.author.id not in bot_admins:
-        await ctx.send("You do not have permission to execute this command.")
+        embed = Embed(title="Permission Denied", description="Admin permissions required to execute this command.", color=0xff0000)
+        await ctx.send(embed=embed)
         return
     
     # Convert map_shortcut to lowercase if it is not None
@@ -836,10 +880,39 @@ async def setmap(ctx, map_shortcut: str = None):
     end_time = time.time()  
     print(f"Total Execution Time: {end_time - start_time} seconds")
 
+@bot.command()
+async def help(ctx):
+    embed = Embed(title="TA-Bot Commands", description="", color=0x00ff00)
+    
+    # For each command, you can add a custom description.
+    commands_dict = {
+        "!debug": {"desc": "Admin-only command for debugging ID matching results for previous game."},
+        "!info": {"desc": "Shows map weighting for generated games, and voting thresholds."},
+        "!kill": {"desc": "Elevated-admin command to shutdown docker containers.", "usage": "!kill [container]"},
+        "!listadmins": {"desc": "Lists all the admins."},
+        "!match": {"desc": "Restricted command for simulating a game starting."},
+        "!servers": {"desc": "Shows server list for \'PUG Login\'."},
+        "!serverstats": {"desc": "Gets some simple stats for the PUG queues."},
+        "!setmap": {"desc": "Admin only command for setting the PUG/2v2 map. Returns list of map IDs if no parameter given.", "usage": "!setmap [map_id]"},
+        "!status": {"desc": "Shows server status for PUGs with no param, or shows status for Mixers with a param of \'2\'.", "usage": "!status [optional_server_index]"}
+    }
 
+    for cmd, values in commands_dict.items():
+        if "usage" in values:
+            embed.add_field(name=cmd, value=f"{values['desc']} Usage: `{values['usage']}`", inline=False)
+        else:
+            embed.add_field(name=cmd, value=values['desc'], inline=False)
+    
+    await ctx.send(embed=embed)
 
 @bot.command(name='debug')
 async def debug(ctx):
+    # Check if the author of the command is in the list of admins
+    if ctx.author.id not in bot_admins:
+        embed = Embed(title="Permission Denied", description="Admin permissions required to execute this command.", color=0xff0000)
+        await ctx.send(embed=embed)
+        return
+
     channel_id = ctx.channel.id
     
     # Send the substitution embed if available
@@ -908,6 +981,8 @@ def format_time(seconds: int) -> str:
         return f"{minutes}m {seconds}s"
     else:
         return f"{seconds}s"
+
+
 
 @tasks.loop(seconds=15)
 async def update_cache():
@@ -998,7 +1073,7 @@ async def servers(ctx):
                 if 'specificServerInfo' in server and 'players' in server['specificServerInfo']:
                     player_info = {'Blood Eagle': [], 'Diamond Sword': []} 
                     for player in server['specificServerInfo']['players']:
-                        team_name = player['team']
+                        team_name = player.get('team', 'Unknown Team')
                         player_info[team_name].append(player['name'])
                     
                     for team, players in player_info.items():
@@ -1041,9 +1116,11 @@ async def countdown(message, time_remaining, server_with_id_3):
         await message.edit(content=f"An unexpected error occurred: {e}")
 
 @bot.command(name='status')
-async def status(ctx):
+async def status(ctx, server_id: int = None):  # Add an optional server_id argument with a default value of None
     global cache
     global countdown_task
+
+    target_server_id = 4 if server_id == 2 else 3
     
     try:
         if countdown_task:
@@ -1057,29 +1134,31 @@ async def status(ctx):
             result = subprocess.run(['node', 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
             servers = json.loads(result.stdout)
         
-        server_with_id_3 = next((server for server in servers if server['id'] == 3), None)
+        server = next((server for server in servers if server['id'] == target_server_id), None)
         
-        if server_with_id_3 and server_with_id_3['numberOfPlayers'] > 0:
+        if server and server['numberOfPlayers'] > 0:
             embed = Embed(color=0x00ff00)
             
-            if 'scores' in server_with_id_3:
-                embed.add_field(name='Scores', value=f"DS: {server_with_id_3['scores']['diamondSword']}\nBE: {server_with_id_3['scores']['bloodEagle']}", inline=True)
+            if server_id == 2:
+                embed.title = "Mixer Status"  # Set title if server_id == 2
+            
+            if 'scores' in server:
+                embed.add_field(name='Scores', value=f"DS: {server['scores']['diamondSword']}\nBE: {server['scores']['bloodEagle']}", inline=True)
                 
             embed.add_field(name='\u200b', value='\u200b', inline=True)  # Spacer column
-                
-            if 'timeRemaining' in server_with_id_3:
-                time_remaining = server_with_id_3['timeRemaining']
+            
+            if 'timeRemaining' in server:
+                time_remaining = server['timeRemaining']
                 embed.add_field(name='Time Remaining', value=f"{format_time(time_remaining)}", inline=True)
             
-            if 'map' in server_with_id_3:
-                map_info = f"{server_with_id_3['map']['name']}"  # Only display map name, exclude gamemode
+            if 'map' in server:
+                map_info = f"{server['map']['name']}"  # Only display map name, exclude gamemode
                 embed.add_field(name='Map', value=map_info, inline=True)  # Updated column for Map Information
 
-                
             message = await ctx.send(embed=embed)
             
-            if time_remaining < 1500:  
-                countdown_task = asyncio.create_task(countdown(message, time_remaining, server_with_id_3))
+            if time_remaining < 1500:
+                countdown_task = asyncio.create_task(countdown(message, time_remaining, server))
         
     except subprocess.CalledProcessError as e:
         await ctx.send(f"Error executing command: {e.stderr}")
@@ -1087,6 +1166,8 @@ async def status(ctx):
         await ctx.send(f"Error decoding JSON: {e}")
     except Exception as e:
         await ctx.send(f"An unexpected error occurred: {e}")
+
+
 
 
 
@@ -1120,10 +1201,7 @@ async def send_match_results(channel, matched_results):
 
 @bot.command()
 async def listadmins(ctx):
-    # Check if the user is a bot admin
-    if ctx.author.id not in bot_admins:
-        await ctx.send("You do not have permission to execute this command.")
-        return
+
     
     embed = Embed(title="Bot Admins", description="List of users with admin for TA-Bot:", color=0x00ff00)
 
