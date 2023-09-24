@@ -103,7 +103,8 @@ map_commands = {
     'mer': 'Meridian',
     'asc': 'Ascent',
     'cra': 'Crash',
-    'tre': 'TreacherousPass'
+    'tre': 'TreacherousPass',
+    'oce': 'Oceanus',
 }
 map_commands_arena = {
     'wi': 'WalledIn',
@@ -123,7 +124,6 @@ maps, weights = zip(*map_weights.items())
 selected_map = random.choices(maps, weights, k=1)[0]
 
 cache = None
-
 
 def fetch_data(start_date, end_date, queue):
     if queue == '2v2':
@@ -805,7 +805,11 @@ async def setmap(ctx, map_shortcut: str = None):
             print(f"SSH Output Read Time: {time.time() - read_time} seconds")
             
             if output:
-                embed = Embed(title="Map changed successfully", description=f"```{output}```", color=0x00ff00)
+                # Get the user's name from the mapping
+                user_id = ctx.author.id
+                user_name = player_name_mapping.get(user_id, str(ctx.author))  # Use the discord username as fallback
+                
+                embed = Embed(title=f"Map changed successfully by {user_name}", description=f"```{output}```", color=0x00ff00)
                 message = await ctx.send(embed=embed)
                 await asyncio.sleep(1)  # Sleep for 1 second to ensure that the message is sent before editing
                 
@@ -829,7 +833,7 @@ async def setmap(ctx, map_shortcut: str = None):
     except Exception as e:
         await ctx.send(f"Error changing map: {e}")
 
-    end_time = time.time()  # End timer when the command has been fully processed
+    end_time = time.time()  
     print(f"Total Execution Time: {end_time - start_time} seconds")
 
 
@@ -965,7 +969,7 @@ async def servers(ctx):
             servers = cache
         else:
             print("Cache is not available, fetching...")
-            result = subprocess.run(['node', 'index.js'], capture_output=True, text=True, check=True)
+            result = subprocess.run(['node', 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
             servers = json.loads(result.stdout)
 
         embed = Embed(title='\'PUG Login\' Game Servers', description='List of available game servers', color=0x00ff00)
@@ -1010,6 +1014,82 @@ async def servers(ctx):
     except Exception as e:
         await ctx.send(f"An unexpected error occurred: {e}")
 
+countdown_task = None
+
+async def countdown(message, time_remaining, server_with_id_3):
+    try:
+        while time_remaining > 0:
+            if server_with_id_3['scores']['diamondSword'] >= 7:
+                await message.edit(content="Diamond Sword wins!")
+                return
+            if server_with_id_3['scores']['bloodEagle'] >= 7:
+                await message.edit(content="Blood Eagle wins!")
+                return
+            
+            embed = message.embeds[0]  # Get the existing embed from the message
+            mins, secs = divmod(time_remaining, 60)
+            embed.set_field_at(2, name='Time Remaining', value=f"{mins}m {secs}s", inline=True)  # Update the time_remaining field in the embed
+            await message.edit(embed=embed)
+            
+            await asyncio.sleep(1)
+            time_remaining -= 1
+        
+        await message.edit(content="Game Over!")
+    except asyncio.CancelledError:
+        pass  # Task has been cancelled, do nothing
+    except Exception as e:
+        await message.edit(content=f"An unexpected error occurred: {e}")
+
+@bot.command(name='status')
+async def status(ctx):
+    global cache
+    global countdown_task
+    
+    try:
+        if countdown_task:
+            countdown_task.cancel()
+        
+        if cache:
+            print("Serving from cache")
+            servers = cache
+        else:
+            print("Cache is not available, fetching...")
+            result = subprocess.run(['node', 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
+            servers = json.loads(result.stdout)
+        
+        server_with_id_3 = next((server for server in servers if server['id'] == 3), None)
+        
+        if server_with_id_3 and server_with_id_3['numberOfPlayers'] > 0:
+            embed = Embed(color=0x00ff00)
+            
+            if 'scores' in server_with_id_3:
+                embed.add_field(name='Scores', value=f"DS: {server_with_id_3['scores']['diamondSword']}\nBE: {server_with_id_3['scores']['bloodEagle']}", inline=True)
+                
+            embed.add_field(name='\u200b', value='\u200b', inline=True)  # Spacer column
+                
+            if 'timeRemaining' in server_with_id_3:
+                time_remaining = server_with_id_3['timeRemaining']
+                embed.add_field(name='Time Remaining', value=f"{format_time(time_remaining)}", inline=True)
+            
+            if 'map' in server_with_id_3:
+                map_info = f"{server_with_id_3['map']['name']}"  # Only display map name, exclude gamemode
+                embed.add_field(name='Map', value=map_info, inline=True)  # Updated column for Map Information
+
+                
+            message = await ctx.send(embed=embed)
+            
+            if time_remaining < 1500:  
+                countdown_task = asyncio.create_task(countdown(message, time_remaining, server_with_id_3))
+        
+    except subprocess.CalledProcessError as e:
+        await ctx.send(f"Error executing command: {e.stderr}")
+    except json.JSONDecodeError as e:
+        await ctx.send(f"Error decoding JSON: {e}")
+    except Exception as e:
+        await ctx.send(f"An unexpected error occurred: {e}")
+
+
+
 async def send_match_results(channel, matched_results):
     result_embed = Embed(title='ID Matching', colour=0x3498db)
 
@@ -1036,6 +1116,33 @@ async def send_match_results(channel, matched_results):
         result_embed.add_field(name='Unmatched Names:', value='\n'.join(matched_results['unmatched_names']), inline=False)
 
     await channel.send(embed=result_embed)
+
+
+@bot.command()
+async def listadmins(ctx):
+    # Check if the user is a bot admin
+    if ctx.author.id not in bot_admins:
+        await ctx.send("You do not have permission to execute this command.")
+        return
+    
+    embed = Embed(title="Bot Admins", description="List of users with admin for TA-Bot:", color=0x00ff00)
+
+    admin_names = sorted([player_name_mapping.get(admin_id, str(admin_id)) for admin_id in bot_admins])
+    
+    num_cols = 3  # Number of columns
+    num_rows = -(-len(admin_names) // num_cols)  
+    
+    for col in range(num_cols):
+        field_value = []  
+        for row in range(num_rows):
+            idx = col * num_rows + row  
+            if idx < len(admin_names):
+                field_value.append(admin_names[idx])
+        
+        field_name = "Admins" if col == 0 else '\u200b' 
+        embed.add_field(name=field_name, value="\n".join(field_value), inline=True)
+    
+    await ctx.send(embed=embed)
 
 
 async def send_player_info(channel, matched_ids, data, player_ratings, player_name_mapping):
