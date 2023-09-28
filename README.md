@@ -35,8 +35,8 @@
 
 4. Open a terminal or command prompt, navigate to the bot's directory, and run the following command to install the required Python packages:
 
-```sh
-pip install discord.py requests trueskill scipy matplotlib configparser asyncio asyncssh pytz
+   ```sh
+   pip install discord.py requests trueskill scipy matplotlib configparser asyncio asyncssh pytz
 
 ## Configuration
 
