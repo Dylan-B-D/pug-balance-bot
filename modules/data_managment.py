@@ -4,19 +4,30 @@ import json
 from datetime import datetime
 
 def fetch_data(start_date, end_date, queue):
-    if queue == '2v2':
-        urls = ['https://sh4z.se/pugstats/naTA.json']
-        json_replaces = ['datanaTA = ']
-        queue_filters = ['2v2']
-    elif queue == 'NA':
-        urls = ['https://sh4z.se/pugstats/naTA.json']
-        json_replaces = ['datanaTA = ']
-        queue_filters = ['PUGz']
-    else:
+    # Define a mapping for the URLs, replacements, and filters
+    queue_mapping = {
+        '2v2': {
+            'urls': ['https://sh4z.se/pugstats/naTA.json'],
+            'json_replaces': ['datanaTA = '],
+            'queue_filters': ['2v2']
+        },
+        'NA': {
+            'urls': ['https://sh4z.se/pugstats/naTA.json'],
+            'json_replaces': ['datanaTA = '],
+            'queue_filters': ['PUGz']
+        },
+        'ALL': {  # Combined data fetching for both 2v2 and PUG
+            'urls': ['https://sh4z.se/pugstats/naTA.json', 'https://sh4z.se/pugstats/naTA.json'],
+            'json_replaces': ['datanaTA = ', 'datanaTA = '],
+            'queue_filters': ['2v2', 'PUGz']
+        }
+    }
+
+    if queue not in queue_mapping:
         raise ValueError(f"Invalid queue: {queue}")
 
     combined_data = []
-    for url, json_replace, queue_filter in zip(urls, json_replaces, queue_filters):
+    for url, json_replace, queue_filter in zip(queue_mapping[queue]['urls'], queue_mapping[queue]['json_replaces'], queue_mapping[queue]['queue_filters']):
         response = requests.get(url)
         json_content = response.text.replace(json_replace, '')
         match = re.search(r'\[.*\]', json_content)

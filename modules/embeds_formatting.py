@@ -19,7 +19,7 @@ def format_names(team, captains, player_ratings):
         names.append(name)
     return names
 
-def create_embed(balanced_teams, captains, player_ratings, title='Balanced Teams', map_name='Unknown Map', map_url='https://i.ibb.co/QM564R3/arx.jpg', rebalance_reactions=0, skip_map_reactions=0):
+def create_embed(balanced_teams, captains, player_ratings, title='Balanced Teams', map_name='Unknown Map', map_url='https://i.ibb.co/QM564R3/arx.jpg', description=None, rebalance_reactions=0, skip_map_reactions=0):
     team1_names = format_names(balanced_teams['team1'], captains, player_ratings)
     team2_names = format_names(balanced_teams['team2'], captains, player_ratings)
 
@@ -37,9 +37,14 @@ def create_embed(balanced_teams, captains, player_ratings, title='Balanced Teams
 
     if map_url:
         balanced_teams_embed.set_thumbnail(url=map_url) 
-    balanced_teams_embed.add_field(name='Map', value=map_name, inline=False) 
+    balanced_teams_embed.add_field(name='Map', value=map_name, inline=False)
+
+    # If a description is provided, add it to the embed.
+    if description:
+        balanced_teams_embed.description = description
 
     return balanced_teams_embed
+
 
 
 def add_maps_to_embed(embed, maps_dict, title, num_cols):
