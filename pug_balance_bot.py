@@ -155,12 +155,20 @@ async def startgame(ctx):
     await ctx.send(embed=embed)
 
 
-async def start_map(ctx, map_shortcut):
+async def start_map(ctx, map_shortcut, server_num=1):
     """Starts the map based on the provided shortcut."""
     try:
+        # Use the server_num to get the correct server configuration
+        server_config = config[f'Server{server_num}']
+
+        countdown_seconds = 35 + (20 if server_num == 2 else 0)
+        
         # Establishing SSH connection and sending the command
         connect_time = time.time()  # Timer before connecting to SSH
-        async with asyncssh.connect(config['SSH']['IP'], username=config['SSH']['Username'], password=config['SSH']['Password']) as conn:
+        async with asyncssh.connect(server_config['IP'], 
+                            username=server_config['Username'], 
+                            password=server_config['Password'], 
+                            known_hosts=None) as conn:
             print(f"SSH Connect Time: {time.time() - connect_time} seconds")
             
             if map_shortcut in map_commands:
@@ -179,21 +187,19 @@ async def start_map(ctx, map_shortcut):
 
             # Handling the output or error from the SSH command
             if output:
-                user_id = ctx.author.id if hasattr(ctx, 'author') else "System"  # Use 'System' as a fallback if ctx does not have an 'author' (e.g., when called from on_message)
-                user_name = player_name_mapping.get(user_id, str(ctx.author) if hasattr(ctx, 'author') else "System")  # Use the discord username or 'System' as fallback
+                user_id = ctx.author.id if hasattr(ctx, 'author') else "System"
+                user_name = player_name_mapping.get(user_id, str(ctx.author) if hasattr(ctx, 'author') else "System")
                 
                 embed = Embed(title=f"Map changed successfully by {user_name}", description=f"```{output}```", color=0x00ff00)
                 message = await ctx.send(embed=embed)
-                await asyncio.sleep(1)  # Sleep for 1 second to ensure that the message is sent before editing
+                await asyncio.sleep(1)
                 
                 # Start the countdown
-                for i in range(35, 0, -1):
-                    # Edit the description of the embed to include the countdown
+                for i in range(countdown_seconds, 0, -1):
                     embed.description = f"```{output}```\nServer joinable in {i} seconds..."
                     await message.edit(embed=embed)
-                    await asyncio.sleep(1)  # Sleep for 1 second between each edit
+                    await asyncio.sleep(1)
                 
-                # Once the countdown is over, edit the message to indicate that the server is joinable
                 embed.description = f"```{output}```\nServer is now joinable!"
                 await message.edit(embed=embed)
             elif error:
@@ -205,6 +211,8 @@ async def start_map(ctx, map_shortcut):
             
     except Exception as e:
         await ctx.send(f"Error changing map: {e}")
+
+
 
 @bot.event
 async def on_message(message):
@@ -350,8 +358,12 @@ async def match_ids(channel, embed):
                 
     content_string = content_string.replace('Captains:', '').strip()
 
-    # Create a dictionary mapping display names to their ids for all members of the guild
+    # Create a dictionary mapping display names and usernames to their ids for all members of the guild
     members_names = {member.display_name: member.id for member in channel.guild.members}
+    members_usernames = {member.name: member.id for member in channel.guild.members}
+    
+    # Merge the two dictionaries
+    members_names.update(members_usernames)
 
     # Split by commas and strip whitespace to get potential full names
     potential_names = [name.strip() for name in content_string.split(',')]
@@ -382,6 +394,7 @@ async def match_ids(channel, embed):
     }
     most_recent_matched_ids[channel.id] = matched_results
     return matched_results
+
 
 
 
@@ -442,7 +455,7 @@ async def send_balanced_teams(channel, players, player_ratings, captains):
                     map_url = map_url_mapping.get(current_map)
 
                     if next_index == 1:
-                        title = 'Balanced Teams'
+                        title = 'Suggested Teams'
                     else:
                         title = f'Rebalanced Teams #{next_index - 1}'
 
@@ -471,7 +484,7 @@ async def match(ctx):
     embed = discord.Embed(
         title="",
         description="**Captains: <@252190261734670336> & <@1146906869827391529>**\n"
-                    "Iced, Jive, Mastin, Nerve, frogkabobs, CRO, Theobald the Bird, freefood, JackTheBlack, Vorpalkitty[Snipe Intern2],Karu , Karuciel",
+                    "crodog5, dodg_, frogkabobs, Giga, killjohnsonjr, rockstaruniverse, Mikesters17, notsolly, imascrewup, Theobald the Bird, cjplayz_, gredwa",
         color=discord.Color.blue()
     )
 
@@ -515,7 +528,7 @@ async def kill(ctx, container: str = None):
 
     # Connect to the remote server via SSH
     try:
-        async with asyncssh.connect(config['SSH']['IP'], username=config['SSH']['Username'], password=config['SSH']['Password']) as conn:
+        async with asyncssh.connect(config['Server1']['IP'], username=config['Server1']['Username'], password=config['Server1']['Password']) as conn:
             if container == "2v2" or container == "all":
                 result_2v2 = await conn.run('docker kill taserver_2v2b_4')
                 if not result_2v2.stderr:
@@ -538,7 +551,7 @@ async def kill(ctx, container: str = None):
         await ctx.send(embed=embed)
         
 @bot.command()
-async def setmap(ctx, map_shortcut: str = None):
+async def setmap(ctx, map_shortcut: str = None, server_num: int = 1):
     start_time = time.time()  # Start timer when the command is triggered
     print(f"Start Time: {start_time}")
     
@@ -565,7 +578,7 @@ async def setmap(ctx, map_shortcut: str = None):
         return
     
     # Start the map using the start_map function
-    await start_map(ctx, map_shortcut)
+    await start_map(ctx, map_shortcut, server_num)
 
     end_time = time.time()  
     print(f"Total Execution Time: {end_time - start_time} seconds")
@@ -959,33 +972,49 @@ def determine_rank(percentile):
     return "Bronze"
 
 @bot.command()
-async def ranks(ctx):
+async def ranks(ctx, min_games: int = 30):
     if not ctx.guild:
         await ctx.send("This command can only be used within a server.")
         return
 
     allowed_user_id = 252190261734670336
-    
+
     if ctx.author.id != allowed_user_id:
         embed = Embed(title="Permission Denied", description="This command is restricted.", color=0xff0000)
         await ctx.send(embed=embed)
         return
-    
+
     try:
+        # Get the timestamp for 6 months ago
+        six_months_ago = datetime.now() - timedelta(days=6*30)  # Using a rough estimate of 6 months
+        six_months_ago_timestamp = int(six_months_ago.timestamp() * 1000)  # Convert to the same format used in the data
+
         # Fetching the data and calculating ratings
         end_date = datetime.now()
         start_date = datetime(2018, 1, 1)
         data = fetch_data(start_date, end_date, 'NA')
-        player_ratings, _, _, _ = calculate_ratings(data, queue='NA')
 
-        # Transforming the player_ratings dict into a list and sorting by mu
-        players_list = [{'id': user_id, 'mu': rating.mu} for user_id, rating in player_ratings.items()]
+        # Get the latest game timestamp for each player
+        latest_game_timestamps = {}
+        for game in data:
+            for player in game['players']:
+                user_id = player['user']['id']
+                game_timestamp = game['timestamp']
+                if user_id not in latest_game_timestamps or game_timestamp > latest_game_timestamps[user_id]:
+                    latest_game_timestamps[user_id] = game_timestamp
+
+        # Filter players based on activity and minimum games played criteria
+        active_players = {user_id for user_id, timestamp in latest_game_timestamps.items() if timestamp >= six_months_ago_timestamp}
+        player_ratings, _, games_played, _ = calculate_ratings(data, queue='NA')
+        players_list = [{'id': user_id, 'mu': rating.mu} for user_id, rating in player_ratings.items() 
+                        if user_id in active_players and games_played[user_id] >= min_games]
+
         players_list.sort(key=lambda x: x['mu'], reverse=True)
         total_players = len(players_list)
 
         # Correcting the percentile calculation
         for index, player in enumerate(players_list):
-            player["percentile"] = 1 - (index / total_players)  # Highest-rated player gets a percentile close to 1
+            player["percentile"] = 1 - (index / total_players)
             player["rank"] = determine_rank(player["percentile"])
 
         # Group players by rank
@@ -994,15 +1023,17 @@ async def ranks(ctx):
             players_grouped_by_rank.setdefault(player["rank"], []).append(player)
 
         # Constants for formatting
-        PLAYERS_PER_EMBED = 60  # 20 players per column, 3 columns
+        COLUMNS = 3
         PLAYERS_PER_COLUMN = 20
 
         for rank, players_of_rank in players_grouped_by_rank.items():
             total_players_of_rank = len(players_of_rank)
+            players_per_embed = PLAYERS_PER_COLUMN * COLUMNS
+            players_per_column_for_rank = (total_players_of_rank + COLUMNS - 1) // COLUMNS  # Distribute players evenly across columns
 
-            for i in range(0, total_players_of_rank, PLAYERS_PER_EMBED):
+            for i in range(0, total_players_of_rank, players_per_embed):
                 embed = Embed(title=f"{rank} Rankings", color=0x00ff00)
-                chunk = players_of_rank[i:i+PLAYERS_PER_EMBED]
+                chunk = players_of_rank[i:i+players_per_embed]
 
                 column_data = ["", "", ""]
                 for j, player in enumerate(chunk):
@@ -1016,12 +1047,12 @@ async def ranks(ctx):
                         member = ctx.guild.get_member(user_id)
                         name = member.display_name if member else str(user_id)
 
-                    col_idx = j // PLAYERS_PER_COLUMN
+                    col_idx = j // players_per_column_for_rank
                     column_data[col_idx] += f"{rank_position}. {name} - µ: {mu:.2f}\n"
 
                 for idx, col in enumerate(column_data):
                     if col:
-                        embed.add_field(name=f"Column {idx+1}", value=col, inline=True)  # Giving each column a heading for clarity
+                        embed.add_field(name=f"Column {idx+1}", value=col, inline=True)
 
                 await ctx.send(embed=embed)
 
@@ -1144,6 +1175,7 @@ async def showstats(ctx, *, player_input: Union[Member, str]):
             await ctx.send(embed=embed_2v2, file=file_2v2)
     except Exception as e:
         await ctx.send(f"Error fetching stats for {player_input}: {e}")
+
 
 @bot.command()
 async def gamelengths(ctx, queue: str = 'ALL'):
