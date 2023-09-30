@@ -9,6 +9,7 @@ import time
 import asyncio
 import asyncssh
 import pytz
+import os
 from typing import Union
 from discord import Member
 from collections import Counter
@@ -21,8 +22,9 @@ from data.map_url_mapping import map_url_mapping
 from data.map_weights import map_weights
 from data.user_roles import privileged_users, bot_admins
 from data.map_commands import map_commands, map_commands_arena
+from data.capper_data import capper_value_mapping
 from modules.data_managment import (fetch_data, count_games_for_ids)
-from modules.rating_calculations import (calculate_ratings)
+from modules.rating_calculations import (calculate_ratings, compute_avg_picks, initialize_player_data, process_matches)
 from modules.team_logic import (balance_teams)
 from modules.embeds_formatting import (create_embed, add_maps_to_embed, format_time)
 from modules.charts import (create_map_weights_chart, create_rolling_percentage_chart, plot_game_lengths)
@@ -137,7 +139,7 @@ async def handle_substitution(message, start_date, end_date):
             default_rating = trueskill.Rating(mu=15, sigma=5)
             players.append({'id': user_id, 'name': name, 'mu': player_ratings.get(user_id, default_rating).mu})
 
-        await send_balanced_teams(message.channel, players, player_ratings, captains)
+        await send_balanced_teams(message.channel, players, player_ratings, captains, data)
 
 @bot.command()
 async def startgame(ctx):
@@ -267,7 +269,7 @@ async def on_message(message):
 
             matched_results_store[message.channel.id] = matched_results
             # await send_player_info(message.channel, matched_results['matched_ids'] + matched_results['matched_strings'], data, player_ratings, player_name_mapping)
-            await send_balanced_teams(message.channel, players, player_ratings, captains)
+            await send_balanced_teams(message.channel, players, player_ratings, captains, data)
     
     if message.embeds:
         embed = message.embeds[0]
@@ -404,9 +406,15 @@ def pick_two_maps():
         selected_maps = random.choices(maps, weights, k=2)
     return selected_maps
 
-async def send_balanced_teams(channel, players, player_ratings, captains):
+async def send_balanced_teams(channel, players, player_ratings, captains, data):
     try:
-        balanced_teams_list = balance_teams(players, captains)
+        # Calculate player_games and avg_picks
+        game_data = data  # Replace with the actual game data
+        player_data = initialize_player_data(game_data)
+        process_matches(game_data, player_data)
+        avg_picks = compute_avg_picks(player_data['picks'])
+        
+        balanced_teams_list = balance_teams(players, captains, player_data['games'], avg_picks, player_ratings)
         if not balanced_teams_list or len(balanced_teams_list) <= 1:
             print("Could not find balanced teams.")
             return
@@ -467,15 +475,74 @@ async def send_balanced_teams(channel, players, player_ratings, captains):
     except Exception as e:
         print(f"Error in sending balanced teams info: {e}")
 
+@bot.command()
+async def getcapvalues(ctx):
+    """
+    Fetches and displays the capper values for the players.
+    """
+    embed = discord.Embed(title="Capper Values", color=discord.Color.blue())
+    
+    # Check if capper_data is empty
+    if not capper_value_mapping:
+        embed.description = "No capper values set."
+    else:
+        for user_id, value in capper_value_mapping.items():
+            player_name = player_name_mapping.get(user_id, str(user_id))  # Use the ID as a fallback if the name isn't found
+            embed.add_field(name=player_name, value=f"Capper Value: {value}", inline=False)
+
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def setcapvalue(ctx, user: discord.User = None, value: float = None):
+    """
+    Sets the capper value for a specified user.
+    Syntax: !setcapvalue @User [value]
+    """
+    
+    # If no user or value is provided, or if the value is out of range
+    if user is None or value is None or not 0 <= value <= 1:
+        embed = discord.Embed(color=discord.Color.red(), description=f"**Incorrect syntax!**\nUsage: `!setcapvalue @User [value between 0 and 1]`")
+        await ctx.send(embed=embed)
+        return
+
+    # Open the capper_data.py file to read its current contents
+    with open("data/capper_data.py", "r") as file:
+        lines = file.readlines()
+
+    # Modify or add the new value for the user
+    user_line_index = None
+    # Fetch the player's name from the player_name_mapping or use the discord name as a fallback
+    player_name = player_name_mapping.get(user.id, user.display_name)
+    user_line_content = f"    {user.id}: {value},  # {player_name}\n"
+    for i, line in enumerate(lines):
+        if str(user.id) in line:
+            user_line_index = i
+            break
+
+    action = "set"
+    if user_line_index is not None:
+        lines[user_line_index] = user_line_content
+        action = "updated"
+    else:
+        # Assuming that the dictionary ends with a closing brace on the last line
+        lines.insert(-1, user_line_content)
+
+    # Write the modified content back to capper_data.py
+    with open("data/capper_data.py", "w") as file:
+        file.writelines(lines)
+
+    # Notify the user of the successful update
+    embed = discord.Embed(color=discord.Color.green(), description=f"Capper value for **{player_name}** has been {action} to **{value}**.")
+    await ctx.send(embed=embed)
 
 
 
 @bot.command()
 async def match(ctx):
     # Specified user ID
-    allowed_user_id = 252190261734670336
+    allowed_user_ids = [252190261734670336, 162786167765336064]
     
-    if ctx.author.id != allowed_user_id:
+    if ctx.author.id not in allowed_user_ids:
         embed = Embed(title="Permission Denied", description="This command is restricted.", color=0xff0000)
         await ctx.send(embed=embed)
         return
@@ -484,7 +551,7 @@ async def match(ctx):
     embed = discord.Embed(
         title="",
         description="**Captains: <@252190261734670336> & <@1146906869827391529>**\n"
-                    "crodog5, dodg_, frogkabobs, Giga, killjohnsonjr, rockstaruniverse, Mikesters17, notsolly, imascrewup, Theobald the Bird, cjplayz_, gredwa",
+                    "crodog5, dodg_, Greth, Giga, killjohnsonjr, TA-Bot, IHateDisc0rd, notsolly, imascrewup, Theobald the Bird, cjplayz_, gredwa",
         color=discord.Color.blue()
     )
 
@@ -737,16 +804,16 @@ async def update_cache():
         cache = json.loads(stdout.decode().strip())
 
         if cache:
-            max_players_server = max(cache, key=lambda server: server['numberOfPlayers'])
-            if max_players_server['numberOfPlayers'] > 0:
-                server_name = max_players_server['name']
-                max_players = max_players_server['maxNumberOfPlayers']
-                current_players = max_players_server['numberOfPlayers']
+            max_players_server = max(cache, key=lambda server: server.get('numberOfPlayers', 0))
+            if max_players_server.get('numberOfPlayers', 0) > 0:
+                server_name = max_players_server.get('name', 'Unknown Server')
+                max_players = max_players_server.get('maxNumberOfPlayers', 0)
+                current_players = max_players_server.get('numberOfPlayers', 0)
                 scores = "N/A"
                 time_remaining = "N/A"
                 
                 if 'scores' in max_players_server:
-                    scores = f"{max_players_server['scores']['bloodEagle']} - {max_players_server['scores']['diamondSword']}"
+                    scores = f"{max_players_server['scores'].get('bloodEagle', 'N/A')} - {max_players_server['scores'].get('diamondSword', 'N/A')}"
                 
                 if 'timeRemaining' in max_players_server:
                     time_remaining = format_time(max_players_server['timeRemaining'])
@@ -781,36 +848,48 @@ async def servers(ctx):
         embed = Embed(title='\'PUG Login\' Game Servers', description='List of available game servers', color=0x00ff00)
         
         for server in servers:
-            if server['numberOfPlayers'] == 0:
+            server_name = server.get('name', 'Unknown Server')
+            
+            if server.get('numberOfPlayers', 0) == 0:
                 server_info = (
-                    f"Players: {server['numberOfPlayers']}/{server['maxNumberOfPlayers']}\n"
+                    f"Players: {server.get('numberOfPlayers', 0)}/{server.get('maxNumberOfPlayers', 0)}\n"
                 )
                 if 'map' in server:
-                    server_info += f"Map: {server['map']['name']} ({server['map']['gamemode']})\n"
+                    server_info += f"Map: {server['map'].get('name', 'N/A')} ({server['map'].get('gamemode', 'N/A')})\n"
             else:
+                region_name = 'N/A'
+                if isinstance(server.get('region'), dict):
+                    region_name = server['region'].get('name', 'N/A')
                 server_info = (
-                    f"Region: {server['region']['name']}\n"
-                    f"Players: {server['numberOfPlayers']}/{server['maxNumberOfPlayers']}\n"
+                    f"Region: {region_name}\n"
+                    f"Players: {server.get('numberOfPlayers', 0)}/{server.get('maxNumberOfPlayers', 0)}\n"
                 )
                 if 'scores' in server:
-                    server_info += f"Scores: BE: {server['scores']['bloodEagle']} - {server['scores']['diamondSword']} :DS\n"
+                    server_info += f"Scores: BE: {server['scores'].get('bloodEagle', 'N/A')} - {server['scores'].get('diamondSword', 'N/A')} :DS\n"
                     
                 if 'map' in server:
-                    server_info += f"Map: {server['map']['name']} ({server['map']['gamemode']})\n"
+                    server_info += f"Map: {server['map'].get('name', 'N/A')} ({server['map'].get('gamemode', 'N/A')})\n"
                     
                 if 'timeRemaining' in server:
-                    server_info += f"Time Remaining: {format_time(server['timeRemaining'])}\n"
+                    server_info += f"Time Remaining: {format_time(server.get('timeRemaining', 'N/A'))}\n"
 
                 if 'specificServerInfo' in server and 'players' in server['specificServerInfo']:
-                    player_info = {'Blood Eagle': [], 'Diamond Sword': []} 
+                    player_info = {'Blood Eagle': [], 'Diamond Sword': [], 'Unknown Team': []}  # Add 'Unknown Team' key
                     for player in server['specificServerInfo']['players']:
                         team_name = player.get('team', 'Unknown Team')
-                        player_info[team_name].append(player['name'])
+                        
+                        # Check if the team name is valid
+                        if team_name not in player_info:
+                            team_name = 'Unknown Team'
+                        
+                        player_info[team_name].append(player.get('name', 'Unknown Player'))
                     
                     for team, players in player_info.items():
-                        server_info += f"{team}: {', '.join(players) if players else 'No players'}\n"
+                        if players:  # Only display teams with players
+                            server_info += f"{team}: {', '.join(players)}\n"
 
-            embed.add_field(name=server['name'], value=server_info, inline=False)
+            embed.add_field(name=server.get('name', 'Unknown Server'), value=server_info, inline=False)
+
 
         await ctx.send(embed=embed)
     except subprocess.CalledProcessError as e:
@@ -820,6 +899,9 @@ async def servers(ctx):
         error_embed = Embed(title="JSON Error", description="There was an issue decoding the server information.", color=0xFF0000)
         await ctx.send(embed=error_embed)
     except Exception as e:
+        print(f"Unexpected Error: {e}")
+        import traceback
+        traceback.print_exc()
         error_embed = Embed(title="Unexpected Error", description="An unexpected error occurred. Please try again later.", color=0xFF0000)
         await ctx.send(embed=error_embed)
 
