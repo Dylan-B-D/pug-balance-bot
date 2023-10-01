@@ -74,6 +74,9 @@ selected_map = random.choices(maps, weights, k=1)[0]
 # Cache for fetched servers list
 cache = None
 
+# Node path variable
+NODE_PATH = os.environ.get('NODE_PATH', 'node')
+
 
 # ==============================
 # FUNCTIONS
@@ -795,7 +798,7 @@ async def update_cache():
     try:
         # Create subprocess.
         process = await asyncio.create_subprocess_exec(
-            'node', 'ta-network-api/index.js',
+            NODE_PATH, 'ta-network-api/index.js',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -849,7 +852,7 @@ async def servers(ctx):
             servers = cache
         else:
             print("Cache is not available, fetching...")
-            result = subprocess.run(['node', 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
+            result = subprocess.run([NODE_PATH, 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
             servers = json.loads(result.stdout)
 
         embed = Embed(title='\'PUG Login\' Game Servers', description='List of available game servers', color=0x00ff00)
@@ -954,7 +957,7 @@ async def status(ctx, server_id: int = None):  # Add an optional server_id argum
             servers = cache
         else:
             print("Cache is not available, fetching...")
-            result = subprocess.run(['node', 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
+            result = subprocess.run([NODE_PATH, 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
             servers = json.loads(result.stdout)
         
         server = next((server for server in servers if server['id'] == target_server_id), None)
