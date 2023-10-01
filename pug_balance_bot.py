@@ -480,6 +480,9 @@ async def getcapvalues(ctx):
     """
     Fetches and displays the capper values for the players.
     """
+    if not await check_bot_admin(ctx):
+        return
+    
     embed = discord.Embed(title="Capper Values", color=discord.Color.blue())
     
     # Check if capper_data is empty
@@ -498,6 +501,8 @@ async def setcapvalue(ctx, user: discord.User = None, value: float = None):
     Sets the capper value for a specified user.
     Syntax: !setcapvalue @User [value]
     """
+    if not await check_bot_admin(ctx):
+        return
     
     # If no user or value is provided, or if the value is out of range
     if user is None or value is None or not 0 <= value <= 1:
@@ -667,7 +672,9 @@ async def help(ctx):
         },
         "Admin": {
             "!debug": "Debug ID matching results for previous game.",
-            "!setmap": "Set the PUG/2v2 map. Returns list of map IDs if no parameter given. Usage: `!setmap [map_id]`"
+            "!getcapvalues": "Shows a list of players cap values, where 1 is always cap, and 0 is never cap.",
+            "!setmap": "Set the PUG/2v2 map. Returns list of map IDs if no parameter given. Usage: `!setmap [map_id]`",
+            "!setcapvalue": "Sets a users cap value. Usage: setcapvalue [@User][capvalue]"
         },
         "Others": {
             "!gamelengths": "Shows a graph of game lengths over time.",

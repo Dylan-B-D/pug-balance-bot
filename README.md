@@ -1,5 +1,5 @@
 # pug-balance-bot
-
+This project uses the ta-network api to retrieve server info, which can be found here:
 [ta-network api GitHub](https://github.com/wilderzone/ta-network-api)
 
 # Available commands
@@ -20,6 +20,8 @@
 15. !showstats - Shows some basic stats for a given player. Usage: !showstats [@User].
 16. !startgame  -  Restricted debug command to simulate when teams have been picked.
 17. !status - Shows server status for PUGs with no param, or shows status for Mixers with a param of '2'. Usage: !status [optional_server_index].
+18. !getcapvalues - Shows a list of players cap values, where 1 is always cap, and 0 is never cap.
+19. !setcapvalue - Sets a users cap value. Usage: setcapvalue [@User][capvalue]
 
 
 ## Requirements
