@@ -80,6 +80,11 @@ def plot_game_lengths(timestamps, game_lengths, queue):
     
     SMOOTHNESS_WINDOW = 40  # Window size for moving average smoothness
 
+    # Filter out anomalies in game lengths
+    valid_indices = [i for i, length in enumerate(game_lengths) if 20 <= length <= 60]
+    game_lengths = [game_lengths[i] for i in valid_indices]
+    timestamps = [timestamps[i] for i in valid_indices]
+
     # Sorting the data based on timestamps to get them in order
     sorted_indices = np.argsort(timestamps)
     game_lengths = np.array(game_lengths)[sorted_indices]
@@ -108,7 +113,7 @@ def plot_game_lengths(timestamps, game_lengths, queue):
     plt.grid(False)
 
     # Save the plot as an image with no background and return the filename
-    filename = "game_lengths_over_games_played.png"
+    filename = "charts/game_lengths_over_games_played.png"
     plt.savefig(filename, transparent=True, bbox_inches='tight', pad_inches=0)
     
     return filename
