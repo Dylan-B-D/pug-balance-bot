@@ -1,5 +1,7 @@
 # pug-balance-bot
 
+[ta-network api GitHub](https://github.com/wilderzone/ta-network-api)
+
 # Available commands
 1. !clear  -  Restricted command to clear the bot's messages from the last 10 mins.
 2. !debug  -  Admin-only command for debugging ID matching results for previous game.
@@ -36,9 +38,16 @@
 4. Open a terminal or command prompt, navigate to the bot's directory, and run the following command to install the required Python packages:
 
    ```sh
-   pip install discord.py requests trueskill scipy matplotlib configparser asyncio asyncssh pytz
+   pip install discord.py requests trueskill scipy matplotlib configparser asyncio asyncssh pytz pandas
+
+5. Also install these nmp package(s)
+   ```sh
+   nmp install ini
 
 ## Configuration
+
+# Node path
+You may need to provide the full path to the node executable if the ta-network-api is having issues.
 
 1. Copy `config.example.ini` to `config.ini`.
 2. Open `config.ini` and fill in the appropriate values for each field.

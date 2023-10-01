@@ -1,0 +1,10 @@
+discord.py
+requests
+trueskill
+scipy
+matplotlib
+configparser
+asyncio
+asyncssh
+pytz
+pandas
