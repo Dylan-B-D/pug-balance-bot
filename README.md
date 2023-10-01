@@ -48,9 +48,6 @@ This project uses the ta-network api to retrieve server info, which can be found
 
 ## Configuration
 
-# Node path
-You may need to provide the full path to the node executable if the ta-network-api is having issues.
-
 1. Copy `config.example.ini` to `config.ini`.
 2. Open `config.ini` and fill in the appropriate values for each field.
 3. Save `config.ini` and run the software.
