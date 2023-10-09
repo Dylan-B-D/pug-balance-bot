@@ -19,7 +19,7 @@ def format_names(team, captains, player_ratings):
         names.append(name)
     return names
 
-def create_embed(balanced_teams, captains, player_ratings, title='Balanced Teams', map_name='Unknown Map', map_url='https://i.ibb.co/QM564R3/arx.jpg', description=None, rebalance_reactions=0, skip_map_reactions=0):
+def create_embed(balanced_teams, captains, player_ratings, title='Suggested Teams', map_name='Unknown Map', map_url='https://i.ibb.co/QM564R3/arx.jpg', description=None, rebalance_reactions=0, skip_map_reactions=0):
     team1_names = format_names(balanced_teams['team1'], captains, player_ratings)
     team2_names = format_names(balanced_teams['team2'], captains, player_ratings)
 
@@ -33,7 +33,7 @@ def create_embed(balanced_teams, captains, player_ratings, title='Balanced Teams
     balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
     balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)
     balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
-    balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
+    # balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
 
     if map_url:
         balanced_teams_embed.set_thumbnail(url=map_url) 

@@ -8,7 +8,6 @@ from data.player_mappings import player_name_mapping
 from data.user_roles import privileged_users, bot_admins
 from data.map_commands import map_commands, map_commands_arena
 from modules.embeds_formatting import add_maps_to_embed
-from modules.utilities import check_bot_admin
 
 # Initialize the configparser and read the config.ini
 config = configparser.ConfigParser()
@@ -59,6 +58,7 @@ class ServerManagementCog(commands.Cog):
             
     @commands.command()
     async def setmap(self, ctx, map_shortcut: str = None, server_num: int = 1):
+        from modules.utilities import check_bot_admin
         start_time = time.time()  # Start timer when the command is triggered
         print(f"Start Time: {start_time}")
         

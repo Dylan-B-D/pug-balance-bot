@@ -5,7 +5,7 @@ from queue import PriorityQueue
 from data.capper_data import capper_value_mapping
 
 CAPPER_PENALTY = 5
-DEVIATION_EXPONENT = 2 
+DEVIATION_EXPONENT = 0 
 NEW_PLAYER_PENALTY = 20
 
 def generate_combinations(players, team_size):
@@ -61,6 +61,15 @@ def balance_teams(players, captains, player_games, avg_picks, player_ratings):
 
             difference = (abs(sum(player['mu'] for player in full_team1) - sum(player['mu'] for player in team2)) + 
                           penalty_team1 + penalty_team2 + new_player_imbalance)
+            
+            # Check if teams are within 4% of a 50/50 balance
+            total_rating = sum(player['mu'] for player in players)
+            team1_rating_percentage = sum(player['mu'] for player in full_team1) / total_rating
+            if 0.47 <= team1_rating_percentage <= 0.53:
+                # Reduce the penalties
+                penalty_team1 /= 2
+                penalty_team2 /= 2
+                new_player_imbalance /= 2
             
             # Add a tiny unique value to the difference
             difference += counter * 1e-10

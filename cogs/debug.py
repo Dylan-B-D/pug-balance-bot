@@ -3,7 +3,7 @@ import re
 from discord.ext import commands
 from discord import Embed
 from modules.utilities import check_bot_admin
-from modules.shared_data import (matched_results_store, substitution_store)
+from data.shared_data import *
 
 class DebugsCog(commands.Cog):
     def __init__(self, bot):
@@ -35,10 +35,16 @@ class DebugsCog(commands.Cog):
             return
         
         # Create the embed
+        """ embed = discord.Embed(
+            title="",
+            description="**Captains: <@162786167765336064> & <@140028568062263296>**\n"
+                        "Evil, songsteal, JackTheBlack (O once per night), ❤ Moth NO OFFENSE(she/her) ❤, n8 nomic, §LEGEND..§, Mike, Nerve, gratismatt, Vorpalkitty, [<3] Jive (Arx, Kata, DX = ban), Blu2th {will hof on uhhhhhhh dx}",
+            color=discord.Color.blue()
+        ) """
         embed = discord.Embed(
             title="",
             description="**Captains: <@252190261734670336> & <@1146906869827391529>**\n"
-                        "crodog5, dodg_, Greth, Giga, killjohnsonjr, TA-Bot, IHateDisc0rd, notsolly, imascrewup, Theobald the Bird, cjplayz_, gredwa",
+                        "crodog5, grethsc, Map Tester Helper, imascrewup, cjplayz_, dodg_, _giga, IHateDisc0rd#1649, gratismatt, gredwa, jacktheblack, mastin",
             color=discord.Color.blue()
         )
 
