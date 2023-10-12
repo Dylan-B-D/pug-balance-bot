@@ -26,8 +26,14 @@ def calculate_win_probability_for_match(match, player_ratings):
 def compute_logit_bonus(pick_order, total_picks=12, delta=0.015):
     normalized_order = (total_picks - pick_order) / (total_picks - 1)
     logit_value = logit(normalized_order * (1 - (2 * delta)) + delta)
-    bonus = 20 * logit_value / abs(logit(delta))
+    
+    if pick_order < 6:
+        bonus = 2 * logit_value / abs(logit(delta))
+    else:
+        bonus = 20 * logit_value / abs(logit(delta))
+    
     return bonus
+
 
 def calculate_draw_rate(game_data):
     total_matches = len(game_data)
@@ -87,10 +93,9 @@ def adjust_ratings_based_on_pick_order(ts, player_ratings, player_games, avg_pic
 
         # Only apply the adjustment for players with less than 100 games
         if player_games[player_id] < 100:    
-                scaling_factor = 0.9 - 0.075 * (avg_pick - 8)
+                scaling_factor = 0.9 - 0.085 * (avg_pick - 8)
                 mu = mu * scaling_factor
 
-        sigma = min(sigma, (50 - mu) / 3, mu / 3)
         player_ratings[player_id] = trueskill.Rating(mu=mu, sigma=sigma)
 
 
@@ -129,14 +134,14 @@ def process_rating_adjustment(ts, game_data, player_ratings, player_data):
 
 def calculate_ratings(game_data, queue='NA'):
     draw_rate = calculate_draw_rate(game_data)
-    custom_tau = 0.1
+    custom_tau = 0.08333333333333
     ts = trueskill.TrueSkill(draw_probability=draw_rate, tau=custom_tau) if queue != 'NA' else trueskill.TrueSkill(tau=custom_tau)
 
     player_data = initialize_player_data(game_data)
     process_matches(game_data, player_data)
     avg_picks = compute_avg_picks(player_data['picks'])
     
-    player_ratings = {player_id: trueskill.Rating(mu=9, sigma=3) for player_id in player_data['games'].keys()}
+    player_ratings = {player_id: trueskill.Rating(mu=9, sigma=8.33) for player_id in player_data['games'].keys()}
     adjust_ratings_based_on_pick_order(ts, player_ratings, player_data['games'], avg_picks, queue, player_data['names'])
     process_rating_adjustment(ts, game_data, player_ratings, player_data)
 

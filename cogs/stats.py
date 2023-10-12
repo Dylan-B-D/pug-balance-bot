@@ -1,4 +1,5 @@
 import discord
+import os
 from typing import Union
 from discord import Member
 from collections import Counter
@@ -9,11 +10,118 @@ from data.player_mappings import player_name_mapping
 from modules.data_managment import (fetch_data)
 from modules.rating_calculations import calculate_ratings
 from modules.charts import (create_rolling_percentage_chart, plot_game_lengths)
+from PIL import Image, ImageDraw, ImageFont
 
 
 class StatsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.command()
+    async def pli(self, ctx, min_games: int = 30):
+        if not ctx.guild:
+            await ctx.send("This command can only be used within a server.")
+            return
+
+        allowed_user_id = 252190261734670336
+        if ctx.author.id != allowed_user_id:
+            embed = Embed(title="Permission Denied", description="This command is restricted.", color=0xff0000)
+            await ctx.send(embed=embed)
+            return
+
+        try:
+            # Get the timestamp for 6 months ago
+            six_months_ago = datetime.now() - timedelta(days=6*30)  # Using a rough estimate of 6 months
+            six_months_ago_timestamp = int(six_months_ago.timestamp() * 1000)  # Convert to the same format used in the data
+
+            # Fetching the data and calculating ratings
+            end_date = datetime.now()
+            start_date = datetime(2018, 1, 1)
+            data = fetch_data(start_date, end_date, 'NA')
+
+            # Get the latest game timestamp for each player
+            latest_game_timestamps = {}
+            for game in data:
+                for player in game['players']:
+                    user_id = player['user']['id']
+                    game_timestamp = game['timestamp']
+                    if user_id not in latest_game_timestamps or game_timestamp > latest_game_timestamps[user_id]:
+                        latest_game_timestamps[user_id] = game_timestamp
+
+            # Filter players based on activity and minimum games played criteria
+            active_players = {user_id for user_id, timestamp in latest_game_timestamps.items() if timestamp >= six_months_ago_timestamp}
+            player_ratings, _, games_played, _ = calculate_ratings(data, queue='NA')
+            players_list = [{'id': user_id, 'mu': rating.mu, 'sigma': rating.sigma} for user_id, rating in player_ratings.items() 
+                            if user_id in active_players and games_played[user_id] >= min_games]
+
+            players_list.sort(key=lambda x: x['mu'], reverse=True)
+
+            # Constants for image creation
+            COLUMNS = 3
+            FONT_SIZE = 24  # Approximate font size for Discord
+            SPACING = 5  # Space between each line
+            MARGIN = 10  # Margin for the image
+            WIDTH_PER_COLUMN = 450  # Width allocation for each column
+            TOTAL_WIDTH = WIDTH_PER_COLUMN * COLUMNS + 2 * MARGIN
+            HEIGHT = (FONT_SIZE + SPACING) * len(players_list) // COLUMNS + 2 * MARGIN + 10
+            NAME_WIDTH = 150  # Set a fixed width for player names
+            VALUE_SPACING = 5  # Spacing between the name and the µ value
+
+            # Create a transparent image
+            img = Image.new("RGBA", (TOTAL_WIDTH, HEIGHT), (255, 255, 255, 0))
+            d = ImageDraw.Draw(img)
+            font = ImageFont.truetype("arial.ttf", FONT_SIZE)  # Using Arial font, you might need to adjust the path
+
+            # Calculate the number of players in each column
+            base_players_per_column = len(players_list) // COLUMNS
+            remainder_players = len(players_list) % COLUMNS
+            players_in_columns = [base_players_per_column + (1 if i < remainder_players else 0) for i in range(COLUMNS)]
+            
+            current_column = 0
+            players_in_current_column = 0
+
+            for j, player in enumerate(players_list):
+                user_id = player['id']
+                mu = player['mu']
+                sigma = player['sigma']
+
+                # Getting the player name from the mapping or the guild members
+                name = player_name_mapping.get(user_id)
+                if not name:
+                    member = ctx.guild.get_member(user_id)
+                    name = member.display_name if member else str(user_id)
+
+                # Truncate the name if it's too long
+                while d.textsize(name, font=font)[0] > NAME_WIDTH:
+                    name = name[:-1]
+
+                # Determine which column the player should be in based on the distribution
+                x_name = MARGIN + current_column * WIDTH_PER_COLUMN
+                y = MARGIN + players_in_current_column * (FONT_SIZE + SPACING)
+                d.text((x_name, y), name, fill="white", font=font)
+
+                x_value = x_name + NAME_WIDTH + VALUE_SPACING
+                d.text((x_value, y), f"{mu:.2f}µ, {sigma:.2f}σ", fill="white", font=font)
+
+                # Update counters for column distribution
+                players_in_current_column += 1
+                if players_in_current_column >= players_in_columns[current_column]:
+                    current_column += 1
+                    players_in_current_column = 0
+
+            if not os.path.exists("charts"):
+                os.makedirs("charts")
+
+            path = "charts/players_chart.png"
+            img.save(path)
+
+            # Send the image
+            await ctx.send(file=discord.File(path))
+
+        except Exception as e:
+            embed = Embed(title="Error", description="An error occurred while creating the players chart.", color=0xff0000)
+            await ctx.send(embed=embed)
+            print(f"Error in !players_chart command: {e}")
 
 
     @commands.command(name='serverstats')
@@ -150,6 +258,81 @@ class StatsCog(commands.Cog):
             print(f"Error in !ranks command: {e}")
 
     @commands.command()
+    async def listplayers(self, ctx, min_games: int = 30):
+        if not ctx.guild:
+            await ctx.send("This command can only be used within a server.")
+            return
+
+        allowed_user_id = 252190261734670336
+
+        if ctx.author.id != allowed_user_id:
+            embed = Embed(title="Permission Denied", description="This command is restricted.", color=0xff0000)
+            await ctx.send(embed=embed)
+            return
+
+        try:
+            # Get the timestamp for 6 months ago
+            six_months_ago = datetime.now() - timedelta(days=6*30)  # Using a rough estimate of 6 months
+            six_months_ago_timestamp = int(six_months_ago.timestamp() * 1000)  # Convert to the same format used in the data
+
+            # Fetching the data and calculating ratings
+            end_date = datetime.now()
+            start_date = datetime(2018, 1, 1)
+            data = fetch_data(start_date, end_date, 'NA')
+
+            # Get the latest game timestamp for each player
+            latest_game_timestamps = {}
+            for game in data:
+                for player in game['players']:
+                    user_id = player['user']['id']
+                    game_timestamp = game['timestamp']
+                    if user_id not in latest_game_timestamps or game_timestamp > latest_game_timestamps[user_id]:
+                        latest_game_timestamps[user_id] = game_timestamp
+
+            # Filter players based on activity and minimum games played criteria
+            active_players = {user_id for user_id, timestamp in latest_game_timestamps.items() if timestamp >= six_months_ago_timestamp}
+            player_ratings, _, games_played, _ = calculate_ratings(data, queue='NA')
+            players_list = [{'id': user_id, 'mu': rating.mu, 'sigma': rating.sigma} for user_id, rating in player_ratings.items() 
+                            if user_id in active_players and games_played[user_id] >= min_games]
+
+            players_list.sort(key=lambda x: x['mu'], reverse=True)
+
+            # Constants for formatting
+            COLUMNS = 3
+            total_players = len(players_list)
+            players_per_column = (total_players + COLUMNS - 1) // COLUMNS  # Distribute players evenly across columns
+
+            embed = Embed(title="Players List by µ", color=0x00ff00)
+            column_data = ["", "", ""]
+            for j, player in enumerate(players_list):
+                user_id = player['id']
+                mu = player['mu']
+                sigma = player['sigma']
+                rank_position = j + 1
+
+                # Getting the player name from the mapping or the guild members
+                name = player_name_mapping.get(user_id)
+                if not name:
+                    member = ctx.guild.get_member(user_id)
+                    name = member.display_name if member else str(user_id)
+
+                col_idx = j // players_per_column
+                column_data[col_idx] += f"{rank_position}. {name} - µ: {mu:.2f}, σ: {sigma:.2f}\n"
+
+            for col in column_data:
+                if col:
+                    embed.add_field(name="\u200b", value=col, inline=True)
+
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            embed = Embed(title="Error", description="An error occurred while fetching player list.", color=0xff0000)
+            await ctx.send(embed=embed)
+            print(f"Error in !players_list command: {e}")
+
+
+
+    @commands.command()
     async def showstats(self, ctx, *, player_input: Union[Member, str]):
         try:
             # If the input is a Discord member, use their ID directly
@@ -213,7 +396,7 @@ class StatsCog(commands.Cog):
             if games_for_player_NA > 0:
                 chart_filename_NA = create_rolling_percentage_chart(player_id, total_data_NA, 'PUG')
                 file_NA = discord.File(chart_filename_NA, filename="rolling_percentage_chart_NA.png")
-                embed_NA = Embed(title="Percentage played over the last 10 games (NA)", color=Colour.blue())
+                embed_NA = Embed(title="Rolling Avg of Percentage played (NA)", color=Colour.blue())
                 embed_NA.set_image(url="attachment://rolling_percentage_chart_NA.png")
                 await ctx.send(embed=embed_NA, file=file_NA)
 
@@ -221,7 +404,7 @@ class StatsCog(commands.Cog):
             if games_for_player_2v2 > 0:
                 chart_filename_2v2 = create_rolling_percentage_chart(player_id, total_data_2v2, '2v2')
                 file_2v2 = discord.File(chart_filename_2v2, filename="rolling_percentage_chart_2v2.png")
-                embed_2v2 = Embed(title="Percentage played over the last 10 games (2v2)", color=Colour.blue())
+                embed_2v2 = Embed(title="Rolling Avg of Percentage played (2v2)", color=Colour.blue())
                 embed_2v2.set_image(url="attachment://rolling_percentage_chart_2v2.png")
                 await ctx.send(embed=embed_2v2, file=file_2v2)
         except Exception as e:
