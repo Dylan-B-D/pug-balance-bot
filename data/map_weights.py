@@ -5,7 +5,5 @@ map_weights = {
     "Oceanus": 8.00,
     "Tartarus": 6.56,
     "Sunstar": 4.30,
-    "Drydock": 3.00,
-    "Blues": 3.00,
-    "Perma": 3.00,
+    "Ascent": 9.00,
 }

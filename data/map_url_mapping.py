@@ -14,5 +14,10 @@ map_url_mapping = {
     "Walled In": "https://i.ibb.co/CMt0xBd/wi.jpg",
     "Elysian Battlegrounds": "https://i.ibb.co/jVTTqDh/eb.jpg",
     "Lava Arena": "https://i.ibb.co/qj8f1Yn/la.jpg",
+    "Ruins": "https://i.ibb.co/6YC5hnC/ruins2.jpg",
+    "Polaris": "https://i.ibb.co/pw5R7GS/polaris2.jpg",
+    "Eclipse": "https://i.ibb.co/54cQcDj/eclipse2.jpg",
+    "Ascent": "https://i.ibb.co/kh7TN4c/ascent2.jpg",
+    "Andromeda": "https://i.ibb.co/nQB3sZ6/andromeda2.jpg",
     "N/A": "https://i.ibb.co/QM564R3/arx.jpg"
 }
