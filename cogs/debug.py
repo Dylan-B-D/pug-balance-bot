@@ -20,7 +20,7 @@ class DebugsCog(commands.Cog):
         
         """Sends an embed to manually trigger the start_map function with the map 'walledin'."""
         embed = Embed(title="Game Details", 
-                    description="**Teams:**\nA Team: Player1, Player2, Player3\nB Team: Player4, Player5, Player6\n\n**Maps:** elysianbattlegrounds", 
+                    description="**Teams:**\nA Team: Player1, Player2, Player3\nB Team: Player4, Player5, Player6\n\n**Maps:** dangerouscrossing", 
                     color=0x00ff00)
         await ctx.send(embed=embed)
 

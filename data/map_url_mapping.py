@@ -17,7 +17,7 @@ map_url_mapping = {
     "Ruins": "https://i.ibb.co/6YC5hnC/ruins2.jpg",
     "Polaris": "https://i.ibb.co/pw5R7GS/polaris2.jpg",
     "Eclipse": "https://i.ibb.co/54cQcDj/eclipse2.jpg",
-    "Ascent": "https://i.ibb.co/kh7TN4c/ascent2.jpg",
+    "Ascent": "https://i.ibb.co/74sxv98/ascent3.jpg",
     "Andromeda": "https://i.ibb.co/nQB3sZ6/andromeda2.jpg",
     "N/A": "https://i.ibb.co/QM564R3/arx.jpg"
 }

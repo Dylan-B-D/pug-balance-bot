@@ -8,6 +8,7 @@ from discord import Embed, Colour
 from datetime import datetime, timedelta
 from data.player_mappings import player_name_mapping
 from modules.data_managment import (fetch_data)
+from modules.utilities import parse_game_history_from_channel
 from modules.rating_calculations import calculate_ratings
 from modules.charts import (create_rolling_percentage_chart, plot_game_lengths)
 from PIL import Image, ImageDraw, ImageFont
@@ -387,7 +388,7 @@ class StatsCog(commands.Cog):
             embed.add_field(name="Last Played", value=last_played_str, inline=False)
 
             # Multi-column format for queue and games played
-            embed.add_field(name="Queue", value="NA\n2v2\nTotal", inline=True)
+            embed.add_field(name="Queue", value="PUG\n2v2\nTotal", inline=True)
             embed.add_field(name="Games Played", value=f"{games_for_player_NA}\n{games_for_player_2v2}\n{games_for_player_ALL}", inline=True)
             
             await ctx.send(embed=embed)
@@ -396,7 +397,7 @@ class StatsCog(commands.Cog):
             if games_for_player_NA > 0:
                 chart_filename_NA = create_rolling_percentage_chart(player_id, total_data_NA, 'PUG')
                 file_NA = discord.File(chart_filename_NA, filename="rolling_percentage_chart_NA.png")
-                embed_NA = Embed(title="Rolling Avg of Percentage played (NA)", color=Colour.blue())
+                embed_NA = Embed(title="Rolling Avg of Percentage played (PUG)", color=Colour.blue())
                 embed_NA.set_image(url="attachment://rolling_percentage_chart_NA.png")
                 await ctx.send(embed=embed_NA, file=file_NA)
 
@@ -502,39 +503,6 @@ def time_ago(past):
         return "{} year(s) ago".format(int(delta_years))
     
 
-async def parse_game_history_from_channel(channel, limit):
-    maps = []
-    last_message_id = None
-    continue_search = True
-
-    while len(maps) < limit and continue_search:
-        if last_message_id:
-            history = channel.history(limit=100, before=discord.Object(id=last_message_id))
-        else:
-            history = channel.history(limit=100)
-
-        fetched_messages = 0
-        async for message in history:
-            fetched_messages += 1
-
-            if len(maps) == limit:  # Stop once we have enough
-                break
-            if message.embeds:
-                embed = message.embeds[0]
-                description = embed.description
-                if description and "**Maps:**" in description:
-                    map_name = description.split("**Maps:**")[1].strip()
-                    naive_datetime = message.created_at.replace(tzinfo=None)
-                    maps.append({"name": map_name, "date": naive_datetime})  # Store entire datetime
-
-            last_message_id = message.id
-
-        # If the loop didn't break due to the limit and we didn't fetch a full 100 messages, 
-        # it means there's no more history
-        if fetched_messages < 100:
-            continue_search = False
-
-    return maps
 
 def get_game_lengths(queue):
     """

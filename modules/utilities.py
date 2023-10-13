@@ -244,10 +244,81 @@ def get_balanced_teams_list(players, captains, player_data, avg_picks, player_ra
         return None
     return balanced_teams_list
 
-def select_maps():
-    current_map, next_map = pick_two_maps()
-    map_url = map_url_mapping.get(current_map)
+async def get_last_two_maps(channel):
+    number_of_maps = 2
+    maps = await parse_game_history_from_channel(channel, number_of_maps)
+    if not maps:
+        return None, None
+
+    most_recent_map = maps[0]["name"]
+    second_recent_map = maps[1]["name"] if len(maps) > 1 else None
+
+    print(most_recent_map)
+    print(second_recent_map)
+
+    return most_recent_map, second_recent_map
+
+
+async def parse_game_history_from_channel(channel, limit):
+    maps = []
+    last_message_id = None
+    continue_search = True
+
+    while len(maps) < limit and continue_search:
+        if last_message_id:
+            history = channel.history(limit=100, before=discord.Object(id=last_message_id))
+        else:
+            history = channel.history(limit=100)
+
+        fetched_messages = 0
+        async for message in history:
+            fetched_messages += 1
+
+            if len(maps) == limit:  # Stop once we have enough
+                break
+            if message.embeds:
+                embed = message.embeds[0]
+                description = embed.description
+                if description and "**Maps:**" in description:
+                    map_name = description.split("**Maps:**")[1].strip()
+                    naive_datetime = message.created_at.replace(tzinfo=None)
+                    maps.append({"name": map_name, "date": naive_datetime})  # Store entire datetime
+
+            last_message_id = message.id
+
+        # If the loop didn't break due to the limit and we didn't fetch a full 100 messages, 
+        # it means there's no more history
+        if fetched_messages < 100:
+            continue_search = False
+
+    return maps
+
+async def select_maps(channel):
+    most_recent, second_recent = await get_last_two_maps(channel)
+    
+    available_maps = []
+    weights_adjusted = []
+
+    for map_name, weight in map_weights.items():
+        if map_name.lower().replace(" ", "") != most_recent:  # Exclude the most recent map
+            available_maps.append(map_name)
+            if map_name.lower().replace(" ", "") == second_recent:  # Adjust weight for the second most recent map
+                weights_adjusted.append(weight * 0.5)
+            else:
+                weights_adjusted.append(weight)
+
+    # Randomly select two maps
+    selected_maps = random.choices(available_maps, weights_adjusted, k=2)
+    while (selected_maps[0].lower().replace(" ", "") in [most_recent, second_recent]
+           or selected_maps[1].lower().replace(" ", "") in [most_recent, second_recent]
+           or selected_maps[0] == selected_maps[1]):
+        selected_maps = random.choices(available_maps, weights_adjusted, k=2)
+
+    current_map, next_map = selected_maps
+    map_url = map_url_mapping.get(current_map, map_url_mapping["N/A"])
     return current_map, next_map, map_url
+
+
 
 async def send_initial_embed(channel, balanced_teams, captains, player_ratings, current_map, map_url, next_map):
     msg = await channel.send(embed=create_embed(balanced_teams, captains, player_ratings, map_name=current_map, map_url=map_url, description=f"Vote 🗺️ to skip to {next_map}"))
@@ -263,7 +334,7 @@ async def send_balanced_teams(bot, channel, players, player_ratings, captains, d
         if not balanced_teams_list:
             return
 
-        current_map, next_map, map_url = select_maps()
+        current_map, next_map, map_url = await select_maps(channel)
         msg = await send_initial_embed(channel, balanced_teams_list[0], captains, player_ratings, current_map, map_url, next_map)
         
         await handle_reactions(bot, msg, players, captains, player_ratings, current_map, next_map, balanced_teams_list)
