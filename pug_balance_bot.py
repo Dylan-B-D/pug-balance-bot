@@ -22,6 +22,7 @@ from cogs.admin import AdminCog
 from cogs.server_management import ServerManagementCog
 from cogs.stats import StatsCog
 from cogs.ta_network import TANetworkCog
+from cogs.cache_queues import QueueCacheCog
 
 
 # ==============================
@@ -61,6 +62,7 @@ async def on_ready():
     await bot.add_cog(ServerManagementCog(bot))
     await bot.add_cog(StatsCog(bot))
     await bot.add_cog(TANetworkCog(bot))
+    await bot.add_cog(QueueCacheCog(bot))
 
 
 @bot.event

@@ -33,7 +33,6 @@ def create_embed(balanced_teams, captains, player_ratings, title='Suggested Team
     balanced_teams_embed.add_field(name='Team 1', value='\n'.join(team1_names) or '[Empty]', inline=True)
     balanced_teams_embed.add_field(name='\u200B', value='\u200B', inline=True)
     balanced_teams_embed.add_field(name='Team 2', value='\n'.join(team2_names) or '[Empty]', inline=True)
-    # balanced_teams_embed.add_field(name='Win Chance for Team 1', value=f'{win_prob_team1*100:.2f}%', inline=False)
 
     if map_url:
         balanced_teams_embed.set_thumbnail(url=map_url) 
@@ -41,9 +40,10 @@ def create_embed(balanced_teams, captains, player_ratings, title='Suggested Team
 
     # If a description is provided, add it to the embed.
     if description:
-        balanced_teams_embed.description = description
+        balanced_teams_embed.add_field(name='Vote', value=description, inline=False)
 
     return balanced_teams_embed
+
 
 
 

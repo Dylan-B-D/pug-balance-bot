@@ -41,28 +41,6 @@ const config = {
 // Create a new connection instance
 const connection = new LoginServerConnection(server, credentials, config);
 
-async function fetchOnlinePlayerData(serverId) {
-    // Initiate the connection with the server
-    await connection.connect();
-
-    // Fetch the number of online players
-    const onlinePlayerNumber = await connection.fetch('OnlinePlayerNumber');
-    // console.log('Number of players online:', onlinePlayerNumber);
-
-    // Fetch the list of online players
-    const onlinePlayerList = await connection.fetch('OnlinePlayerList');
-    // console.log('List of players online:', onlinePlayerList);
-
-    // Fetch the list of game servers
-    const gameServerList = await connection.fetch('GameServerList');
-    // console.log('List of game servers:', gameServerList);
-
-    const specificServerInfo = await connection.fetch('GameServerInfo', serverId);
-    console.log('Information about the specific server:', specificServerInfo);
-}
-
-// Run the function
-//fetchOnlinePlayerData(3).catch(error => console.error('An error occurred:', error));
 
 async function fetchGameServerList() {
     try {

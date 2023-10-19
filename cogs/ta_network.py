@@ -2,6 +2,7 @@ import json
 import subprocess
 import asyncio
 import os
+import time
 import discord
 from discord.ext import commands, tasks
 from filelock import FileLock
@@ -18,18 +19,20 @@ NODE_PATH = os.environ.get('NODE_PATH', 'node')
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # Go up one directory level
 
 # Create a 'data' directory if it doesn't exist
-DATA_DIR = os.path.join(BASE_DIR, 'data')
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+CACHE_DIR = os.path.join(BASE_DIR, 'cache')
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 
 # Set the cache file paths inside the 'data' directory
-CACHE_FILE_PATH = os.path.join(DATA_DIR, "cache.json")
-TEMP_CACHE_FILE_PATH = os.path.join(DATA_DIR, "temp_cache.json")
+CACHE_FILE_PATH = os.path.join(CACHE_DIR, "cache.json")
+TEMP_CACHE_FILE_PATH = os.path.join(CACHE_DIR, "temp_cache.json")
 
 class TANetworkCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.cache = None
+        self.previous_cache = []
+        self.last_status_message = None
         self.update_cache.start()
 
     @commands.Cog.listener()
@@ -37,7 +40,7 @@ class TANetworkCog(commands.Cog):
         await self.update_cache()
 
     
-    @tasks.loop(seconds=45)
+    @tasks.loop(seconds=30)
     async def update_cache(self):
         try:
             # Create subprocess.
@@ -46,7 +49,6 @@ class TANetworkCog(commands.Cog):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-
             
             # Wait for the subprocess to finish and get the stdout and stderr.
             stdout, stderr = await process.communicate()
@@ -60,29 +62,53 @@ class TANetworkCog(commands.Cog):
             with open(CACHE_FILE_PATH, 'w') as f:
                 json.dump(cache, f)
 
-            if cache:
-                max_players_server = max(cache, key=lambda server: server.get('numberOfPlayers', 0))
-                if max_players_server.get('numberOfPlayers', 0) > 0:
-                    server_name = max_players_server.get('name', 'Unknown Server')
-                    max_players = max_players_server.get('maxNumberOfPlayers', 0)
-                    current_players = max_players_server.get('numberOfPlayers', 0)
+            # Construct the new embed using the updated cache
+            embed = discord.Embed(title="Server Status", color=0x00ff00)
+            for server in cache:
+                number_of_players = server.get('numberOfPlayers', 0)
+                if number_of_players > 0:
+                    raw_server_name = server.get('name', 'Unknown Server')
+                    server_name = process_server_name(raw_server_name)
+
                     scores = "N/A"
+                    if 'scores' in server:
+                        scores = f"DS: {server['scores']['diamondSword']} - BE: {server['scores']['bloodEagle']}"
+
                     time_remaining = "N/A"
-                    
-                    if 'scores' in max_players_server:
-                        scores = f"{max_players_server['scores'].get('bloodEagle', 'N/A')} - {max_players_server['scores'].get('diamondSword', 'N/A')}"
-                    
-                    if 'timeRemaining' in max_players_server:
-                        time_remaining = format_time(max_players_server['timeRemaining'])
-                    
-                    activity_message = f"Players in {server_name}: {current_players}/{max_players}, Score: {scores}, Time Remaining: {time_remaining}"
-                else:
-                    activity_message = f"All Servers on 'PUG Login' Empty"
+                    if 'timeRemaining' in server:
+                        time_remaining = format_time(server['timeRemaining'])
+
+                    embed.add_field(name=server_name, value=f"Scores: {scores}\nTime Remaining: {time_remaining}", inline=True)
+
+            # Update the bot's presence and the last status message embed
+            max_players_server = max(cache, key=lambda server: server.get('numberOfPlayers', 0))
+            if max_players_server.get('numberOfPlayers', 0) > 0:
+                server_name = max_players_server.get('name', 'Unknown Server')
+                max_players = max_players_server.get('maxNumberOfPlayers', 0)
+                current_players = max_players_server.get('numberOfPlayers', 0)
+                scores = "N/A"
+                time_remaining = "N/A"
                 
-                await self.bot.change_presence(activity=discord.Game(name=activity_message))
+                if 'scores' in max_players_server:
+                    scores = f"{max_players_server['scores'].get('bloodEagle', 'N/A')} - {max_players_server['scores'].get('diamondSword', 'N/A')}"
+                
+                if 'timeRemaining' in max_players_server:
+                    time_remaining = format_time(max_players_server['timeRemaining'])
+                
+                activity_message = f"Players in {server_name}: {current_players}/{max_players}, Score: {scores}, Time Remaining: {time_remaining}"
+            else:
+                activity_message = f"All Servers on 'PUG Login' Empty"
             
+            await self.bot.change_presence(activity=discord.Game(name=activity_message))
+
+            # Edit the last status message
+            if hasattr(self, 'last_status_message') and self.last_status_message:  # Check if last_status_message exists and is not None
+                await self.last_status_message.edit(embed=embed)
+                
         except Exception as e:
             print(f"An error occurred while updating the cache: {e}")
+
+        
 
 
     @commands.command(name='servers')
@@ -160,16 +186,10 @@ class TANetworkCog(commands.Cog):
 
 
     @commands.command(name='status')
-    async def status(self, ctx, server_id: int = None):  # Add an optional server_id argument with a default value of None
+    async def status(self, ctx): 
         cache = load_cache_from_file()
-        global countdown_task
 
-        target_server_id = 4 if server_id == 2 else 3
-        
         try:
-            if countdown_task:
-                countdown_task.cancel()
-            
             if cache:
                 print("Serving from cache")
                 servers = cache
@@ -177,42 +197,49 @@ class TANetworkCog(commands.Cog):
                 print("Cache is not available, fetching...")
                 result = subprocess.run([NODE_PATH, 'ta-network-api/index.js',], capture_output=True, text=True, check=True)
                 servers = json.loads(result.stdout)
-            
-            server = next((server for server in servers if server['id'] == target_server_id), None)
-            
-            if server and server['numberOfPlayers'] > 0:
-                embed = Embed(color=0x00ff00)
                 
-                if server_id == 2:
-                    embed.title = "Mixer Status"  # Set title if server_id == 2
-                
-                if 'scores' in server:
-                    embed.add_field(name='Scores', value=f"DS: {server['scores']['diamondSword']}\nBE: {server['scores']['bloodEagle']}", inline=True)
-                    
-                embed.add_field(name='\u200b', value='\u200b', inline=True)  # Spacer column
-                
-                if 'timeRemaining' in server:
-                    time_remaining = server['timeRemaining']
-                    embed.add_field(name='Time Remaining', value=f"{format_time(time_remaining)}", inline=True)
-                
-                if 'map' in server:
-                    map_info = f"{server['map']['name']}"  # Only display map name, exclude gamemode
-                    embed.add_field(name='Map', value=map_info, inline=True)  # Updated column for Map Information
+            # Create an embed
+            embed = discord.Embed(color=0x00ff00)
+            has_active_servers = False  # Flag to check if there are servers with players
 
-                message = await ctx.send(embed=embed)
-                
-                if time_remaining < 1500:
-                    countdown_task = asyncio.create_task(countdown(message, time_remaining, server))
-            
+            # Iterate over each server and add its details to the embed
+            for server in servers:
+                number_of_players = server.get('numberOfPlayers', 0)
+
+                # Only process servers with at least 1 player
+                if number_of_players > 0:
+                    has_active_servers = True
+                    raw_server_name = server.get('name', 'Unknown Server')
+                    server_name = process_server_name(raw_server_name)
+
+                    # Scores
+                    scores = "N/A"
+                    if 'scores' in server:
+                        scores = f"DS: {server['scores']['diamondSword']} - BE: {server['scores']['bloodEagle']}"
+
+                    # Time Remaining
+                    time_remaining = "N/A"
+                    if 'timeRemaining' in server:
+                        time_remaining = format_time(server['timeRemaining'])
+
+                    # Add the server details to the embed as a field
+                    embed.add_field(name=server_name, value=f"Scores: {scores}\nTime Remaining: {time_remaining}", inline=True)
+
+            # If there are servers with players, store the message reference and send the embed
+            if has_active_servers:
+                self.last_status_message = await ctx.send(embed=embed)
+
         except subprocess.CalledProcessError as e:
-            error_embed = Embed(title="Error", description="An error occurred while fetching the server information. Please try again later.", color=0xFF0000)
+            error_embed = discord.Embed(title="Error", description="An error occurred while fetching the server information. Please try again later.", color=0xFF0000)
             await ctx.send(embed=error_embed)
         except json.JSONDecodeError as e:
-            error_embed = Embed(title="JSON Error", description="There was an issue decoding the server information.", color=0xFF0000)
+            error_embed = discord.Embed(title="JSON Error", description="There was an issue decoding the server information.", color=0xFF0000)
             await ctx.send(embed=error_embed)
         except Exception as e:
-            error_embed = Embed(title="Unexpected Error", description="An unexpected error occurred. Please try again later.", color=0xFF0000)
+            error_embed = discord.Embed(title="Unexpected Error", description="An unexpected error occurred. Please try again later.", color=0xFF0000)
             await ctx.send(embed=error_embed)
+
+
 
 
 def load_cache_from_file():
@@ -232,6 +259,20 @@ def save_cache_to_file(data):
             json.dump(data, f)
     # Rename the temporary file to the actual cache file
     os.rename(TEMP_CACHE_FILE_PATH, CACHE_FILE_PATH)
+
+def process_server_name(raw_name: str) -> str:
+    # Remove the mentioned prefixes
+    if raw_name.startswith("GOTY |"):
+        raw_name = raw_name[7:]
+    elif raw_name.startswith("OOTB |"):
+        raw_name = raw_name[7:]
+
+    # Truncate the name and add "..." if it's longer than 15 characters
+    if len(raw_name) > 19:
+        raw_name = raw_name[:19] + ".."
+    
+    return raw_name
+
 
 async def countdown(message, time_remaining, server_with_id_3):
     try:
