@@ -22,11 +22,11 @@ class QueueCacheCog(commands.Cog):
         self.bot = bot
         self.update_queues_cache.start()
 
-    @tasks.loop(seconds=300)  # Every 300 seconds
+    @tasks.loop(seconds=60) 
     async def update_queues_cache(self):
         try:
             for queue in ['2v2', 'NA', 'ALL']:
-                print(f"Fetching data for queue: {queue}")
+                # print(f"Fetching data for queue: {queue}")
                 data = fetch_data(datetime.now() - timedelta(days=9999), datetime.now(), queue) 
                 self.save_queue_to_cache(queue, data)
         except Exception as e:
@@ -72,5 +72,5 @@ def fetch_data(start_date, end_date, queue):
                          and start_date <= datetime.fromtimestamp(game['timestamp'] / 1000) <= end_date]
         combined_data.extend(filtered_data)
 
-    print(f"Fetched {len(combined_data)} games for {queue} queue.")
+    # print(f"Fetched {len(combined_data)} games for {queue} queue.")
     return combined_data

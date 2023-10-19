@@ -2,6 +2,7 @@ import os
 import requests
 import json
 from datetime import datetime
+from filelock import FileLock
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # Go up one directory level
 
@@ -41,10 +42,16 @@ def fetch_data(start_date, end_date, queue):
 
     # If cached data exists for the queue, load and return it
     if os.path.exists(queue_cache_file_path):
-        with open(queue_cache_file_path, 'r') as f:
-            cached_data = json.load(f)
-        print(f"Loaded {len(cached_data)} games from cache for {queue} queue.")
-        return cached_data
+        try:
+            with FileLock(queue_cache_file_path + ".lock"):
+                with open(queue_cache_file_path, 'r') as f:
+                    cached_data = json.load(f)
+                print(f"Loaded {len(cached_data)} games from cache for {queue} queue.")
+                return cached_data
+        except json.JSONDecodeError:
+            print(f"Error loading cached data for {queue} queue. The cache file might be corrupt or empty.")
+            return []
+
 
     # If no cached data, fetch from the API
     combined_data = []
