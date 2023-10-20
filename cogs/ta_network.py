@@ -70,7 +70,6 @@ class TANetworkCog(commands.Cog):
                 raise Exception(f"Subprocess exited with error: {stderr.decode().strip()}")
 
             new_cache = json.loads(stdout.decode().strip())
-
             self.process_active_games(new_cache)
 
             with open(CACHE_FILE_PATH, 'w') as f:
@@ -134,6 +133,8 @@ class TANetworkCog(commands.Cog):
 
         except Exception as e:
             print(f"An error occurred while updating the cache: {e}")
+            print("Traceback (most recent call last):")
+            traceback.print_exc()
 
     
 
@@ -147,6 +148,11 @@ class TANetworkCog(commands.Cog):
         for server in new_cache:
             old_server = next((s for s in self.cache if s["id"] == server["id"]), None)
             
+            # Check if old_server is None before using it
+            if old_server is None:
+                # print("Warning: old_server is None!")
+                continue
+
             # Ensure necessary fields are present before processing
             if not all(key in server for key in ["id", "map", "scores", "timeRemaining"]):
                 continue
@@ -205,6 +211,10 @@ class TANetworkCog(commands.Cog):
 
 
     def save_game_to_history(self, server):
+        # Check if server is None before using it
+        if server is None:
+            print("Warning: server is None in save_game_to_history!")
+            return
         completed_games_file = os.path.join(DATA_DIR, "completed_games.json")
         
         # Load previous completed games

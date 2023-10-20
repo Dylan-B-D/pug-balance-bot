@@ -24,9 +24,7 @@ class QueueCog(commands.Cog):
         self.cache_file_path = os.path.join(CACHE_DIR, 'queue_cache.json')
         self.queues = self.load_queue_from_cache()
         self.check_queues.start()
-        self.user_last_added_time = {}
  
-        
 
     queue_mapping = {
     "1": "PUG",
@@ -36,27 +34,39 @@ class QueueCog(commands.Cog):
     
     
     def load_queue_from_cache(self):
-        """Load queue from the cache file if it exists, otherwise return default queue data."""
+        """Load queue and last added times from the cache file if it exists, otherwise return default queue data."""
         default_queues = {
             "PUG": {"members": [], "size": 14},
             "2v2": {"members": [], "size": 4},
             "lag2v2": {"members": [], "size": 4}
         }
 
+        default_last_added_times = {}
+
         if os.path.exists(self.cache_file_path):
             with open(self.cache_file_path, 'r') as f:
                 try:
-                    return json.load(f)
+                    data = json.load(f)
+                    self.user_last_added_time = data.get("user_last_added_time", default_last_added_times)
+                    return data.get("queues", default_queues)
                 except json.JSONDecodeError:
-                    # If there's an error decoding the file, return the default queues
+                    # If there's an error decoding the file, return the default queues and set default last added times
+                    self.user_last_added_time = default_last_added_times
                     return default_queues
         else:
+            self.user_last_added_time = default_last_added_times
             return default_queues
 
+
     def save_queue_to_cache(self):
-        """Save the current queue data to the cache file."""
+        """Save the current queue data and last added times to the cache file."""
         with open(self.cache_file_path, 'w') as f:
-            json.dump(self.queues, f)
+            data = {
+                "queues": self.queues,
+                "user_last_added_time": self.user_last_added_time
+            }
+            json.dump(data, f)
+
 
     def _get_user_name(self, user_id):
         user = self.bot.get_user(user_id)
@@ -152,7 +162,7 @@ class QueueCog(commands.Cog):
                 })
 
                 # Update the user's most recent addition time
-                self.user_last_added_time[user.id] = time.time()
+                self.user_last_added_time[str(user.id)] = time.time()
 
                 message_parts.append(f"{queue_name} ({len(queue_data['members'])}/{queue_data['size']})")
 
@@ -256,25 +266,25 @@ class QueueCog(commands.Cog):
                     member_id = member_data["id"]
                     member = guild.get_member(member_id)
 
-                    # If the member doesn't exist in the guild, consider removing them from the queue
-                    if not member:
-                        members_to_remove.append(member_data)
-                        continue
 
                     # Use the most recent addition time to check for 180 minutes expiry
-                    last_added_time = self.user_last_added_time.get(member_id, 0)
+                    last_added_time = self.user_last_added_time.get(str(member_id), 0)
                     elapsed_time = time.time() - last_added_time
 
                     if elapsed_time > 180 * 60:
                         members_to_remove.append(member_data)
                         messages_to_send.add((f"{member.mention} You have been removed from all queues due to being AFK for over 180 minutes.", member_data["channel_id"], member_data["guild_id"]))
+                        
+                        # Adding the print statement here
+                        print(f"Removed {member.name} due to AFK for {elapsed_time/60:.2f} minutes.")
                         continue
 
+
                     # Remove members who are offline and have been offline for over 20 minutes
-                    if self.is_member_offline(member) and elapsed_time > 20 * 60:
-                        members_to_remove.append(member_data)
-                        messages_to_send.add((f"{member.mention} You have been removed from the `{queue_name}` queue due to being offline for over 20 minutes.", member_data["channel_id"], member_data["guild_id"]))
-                        continue
+                    # if self.is_member_offline(member) and elapsed_time > 20 * 60:
+                        # members_to_remove.append(member_data)
+                        # messages_to_send.add((f"{member.mention} You have been removed from the `{queue_name}` queue due to being offline for over 20 minutes.", member_data["channel_id"], member_data["guild_id"]))
+                        # continue
 
                 # Remove members from all queues
                 for member_data in members_to_remove:
