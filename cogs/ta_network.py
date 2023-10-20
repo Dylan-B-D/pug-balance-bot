@@ -147,17 +147,23 @@ class TANetworkCog(commands.Cog):
         for server in new_cache:
             old_server = next((s for s in self.cache if s["id"] == server["id"]), None)
             
-            gamemode = server.get("map", {}).get("gamemode")
-            scores = server.get("scores", {})
-            bloodEagle_score = scores.get("bloodEagle", 0)
-            diamondSword_score = scores.get("diamondSword", 0)
-            timeRemaining = server.get("timeRemaining", None)
+            # Ensure necessary fields are present before processing
+            if not all(key in server for key in ["id", "map", "scores", "timeRemaining"]):
+                continue
+
+            gamemode = server["map"]["gamemode"]
+            bloodEagle_score = server["scores"]["bloodEagle"]
+            diamondSword_score = server["scores"]["diamondSword"]
+            timeRemaining = server["timeRemaining"]
 
             if old_server:
-                old_scores = old_server.get("scores", {})
-                old_bloodEagle_score = old_scores.get("bloodEagle", 0)
-                old_diamondSword_score = old_scores.get("diamondSword", 0)
-                old_timeRemaining = old_server.get("timeRemaining", None)
+                # Ensure old server has the necessary fields
+                if not all(key in old_server for key in ["scores", "timeRemaining"]):
+                    continue
+
+                old_bloodEagle_score = old_server["scores"]["bloodEagle"]
+                old_diamondSword_score = old_server["scores"]["diamondSword"]
+                old_timeRemaining = old_server["timeRemaining"]
             else:
                 old_bloodEagle_score, old_diamondSword_score, old_timeRemaining = 0, 0, None
 

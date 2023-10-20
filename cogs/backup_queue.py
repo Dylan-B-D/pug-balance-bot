@@ -23,7 +23,9 @@ class QueueCog(commands.Cog):
         self.bot = bot
         self.cache_file_path = os.path.join(CACHE_DIR, 'queue_cache.json')
         self.queues = self.load_queue_from_cache()
-        self.check_queues.start() 
+        self.check_queues.start()
+        self.user_last_added_time = {}
+ 
         
 
     queue_mapping = {
@@ -31,6 +33,7 @@ class QueueCog(commands.Cog):
     "2": "2v2",
     "3": "lag2v2"
     }
+    
     
     def load_queue_from_cache(self):
         """Load queue from the cache file if it exists, otherwise return default queue data."""
@@ -59,70 +62,6 @@ class QueueCog(commands.Cog):
         user = self.bot.get_user(user_id)
         return player_name_mapping.get(user_id, user.display_name if user else "Unknown User")
 
-
-    @commands.command(name='add2')
-    async def add(self, ctx, qtype: str = None):
-        user_id = ctx.author.id
-        user_name = self._get_user_name(user_id)
-        message_parts = []
-        already_in_queues = []
-
-        if qtype and qtype in self.queue_mapping:
-            qtype = self.queue_mapping[qtype]
-
-        for queue_name, queue_data in self.queues.items():
-            if qtype and qtype != queue_name:
-                continue
-            if user_id not in queue_data["members"]:
-                queue_data["members"].append({"id": user_id, "joined_at": time.time()})
-                current_queue_status = f"`{queue_name}` ({len(queue_data['members'])}/{queue_data['size']})"
-                message_parts.append(current_queue_status)
-                if len(queue_data["members"]) == queue_data["size"]:
-                    await self.start_game(ctx, queue_name, queue_data["members"])
-                    queue_data["members"] = []
-            else:
-                already_in_queues.append(queue_name)
-
-        # Create a response message based on whether the user is added to queues or is already in them
-        response_message = ""
-        if message_parts:
-            response_message += f"`{user_name}` has been added to {', '.join(message_parts)}."
-        if already_in_queues:
-            response_message += f" `{user_name}` is already in {', '.join(already_in_queues)}."
-
-        await ctx.send(embed=discord.Embed(description=response_message, color=0x00ff00))
-
-        # Save the changes to the cache
-        self.save_queue_to_cache()
-
-
-    @commands.command(name='del2')
-    async def remove_from_queue(self, ctx, qtype: str = None):
-        user_id = ctx.author.id
-        user_name = self._get_user_name(user_id)
-        message_parts = []
-        not_in_queues = []
-
-        for queue_name, queue_data in self.queues.items():
-            if qtype and qtype != queue_name:
-                continue
-            if user_id in queue_data["members"]:
-                queue_data["members"].remove(user_id)
-                message_parts.append(f"{queue_name} ({len(queue_data['members'])}/{queue_data['size']})")
-            else:
-                not_in_queues.append(queue_name)
-
-        # Create a response message based on whether the user is removed from queues or if they weren't in the queue
-        response_message = ""
-        if message_parts:
-            response_message += f"`{user_name}` has been removed from {', '.join(message_parts)}."
-        if not_in_queues:
-            response_message += f" Note: `{user_name}` was not in {', '.join(not_in_queues)}."
-
-        await ctx.send(embed=discord.Embed(description=response_message, color=(0xff0000 if message_parts else 0xffff00)))
-
-        # Save the changes to the cache
-        self.save_queue_to_cache()
 
 
     @commands.command(name='status2')
@@ -186,6 +125,60 @@ class QueueCog(commands.Cog):
                     return member
             return None
 
+    async def _add_to_queues(self, user, ctx, qtype=None):
+        # Limit users to add only in specific channels
+        allowed_channel_ids = [1154371216946249740, 912341856048775198]  # You can add more channel IDs here if needed
+        if ctx.channel.id not in allowed_channel_ids:
+            await ctx.send("You cannot add to the queue in this channel.")
+            return
+
+        if qtype and qtype in self.queue_mapping:
+            qtype = self.queue_mapping[qtype]
+
+        message_parts = []
+        already_in_queues = []
+
+        for queue_name, queue_data in self.queues.items():
+            if qtype and qtype != queue_name:
+                continue
+
+            # Check if user is not already in the queue
+            if user.id not in [m["id"] for m in queue_data["members"]]:
+                queue_data["members"].append({
+                    "id": user.id, 
+                    "joined_at": time.time(), 
+                    "channel_id": ctx.channel.id,
+                    "guild_id": ctx.guild.id
+                })
+
+                # Update the user's most recent addition time
+                self.user_last_added_time[user.id] = time.time()
+
+                message_parts.append(f"{queue_name} ({len(queue_data['members'])}/{queue_data['size']})")
+
+                # Check if queue is full and start game
+                if len(queue_data["members"]) == queue_data["size"]:
+                    await self.start_game(ctx, queue_name, [m["id"] for m in queue_data["members"]])
+                    queue_data["members"] = []
+            else:
+                already_in_queues.append(queue_name)
+
+        # Create response message
+        response_message = ""
+        if message_parts:
+            response_message += f"`{user.display_name}` has been added to {', '.join(message_parts)}."
+        if already_in_queues:
+            response_message += f" `{user.display_name}` is already in {', '.join(already_in_queues)}."
+
+        await ctx.send(embed=discord.Embed(description=response_message, color=0x00ff00))
+
+        # Save the changes to the cache
+        self.save_queue_to_cache()
+
+    @commands.command(name='add2')
+    async def add(self, ctx, qtype: str = None):
+        await self._add_to_queues(ctx.author, ctx, qtype)
+
     @commands.command(name='addplayer')
     async def addplayer(self, ctx, name_or_mention: str, qtype: str = None):
         if ctx.author.id not in allowed_user_ids:
@@ -198,65 +191,67 @@ class QueueCog(commands.Cog):
             await ctx.send(f"Could not find member {name_or_mention}")
             return
 
+        await self._add_to_queues(member, ctx, qtype)
+
+    async def _remove_from_queues(self, user, ctx, qtype=None):
         if qtype and qtype in self.queue_mapping:
             qtype = self.queue_mapping[qtype]
 
         message_parts = []
+        not_in_queues = []
+
         for queue_name, queue_data in self.queues.items():
             if qtype and qtype != queue_name:
                 continue
 
-            # Check if member is not already in the queue
-            if member.id not in [m["id"] for m in queue_data["members"]]:
-                queue_data["members"].append({"id": member.id, "joined_at": time.time()})
+            if user.id in [m["id"] for m in queue_data["members"]]:
+                queue_data["members"] = [m for m in queue_data["members"] if m["id"] != user.id]
                 message_parts.append(f"{queue_name} ({len(queue_data['members'])}/{queue_data['size']})")
+            else:
+                not_in_queues.append(queue_name)
 
-                # Check if queue is full and start game
-                if len(queue_data["members"]) == queue_data["size"]:
-                    await self.start_game(ctx, queue_name, [m["id"] for m in queue_data["members"]])
-                    queue_data["members"] = []
+        # Create response message
+        response_message = ""
+        if message_parts:
+            response_message += f"`{user.display_name}` has been removed from {', '.join(message_parts)}."
+        if not_in_queues:
+            response_message += f" Note: `{user.display_name}` was not in {', '.join(not_in_queues)}."
 
-        await ctx.send(embed=discord.Embed(description=f"`{member.display_name}` has been added to {', '.join(message_parts)}.", color=0x00ff00))
+        color = 0xff0000 if message_parts else 0xffff00
+        await ctx.send(embed=discord.Embed(description=response_message, color=color))
 
         # Save the changes to the cache
         self.save_queue_to_cache()
+
+    @commands.command(name='del2')
+    async def remove_from_queue(self, ctx, qtype: str = None):
+        await self._remove_from_queues(ctx.author, ctx, qtype)
 
     @commands.command(name='removeplayer')
     async def removeplayer(self, ctx, name_or_mention: str, qtype: str = None):
         if ctx.author.id not in allowed_user_ids:
             await ctx.send("You do not have permission to use this command!")
             return
-        
+            
         member = await self._get_member_from_name_or_mention(ctx, name_or_mention)
-
+            
         if not member:
             await ctx.send(f"Could not find member {name_or_mention}")
             return
 
-        if qtype and qtype in self.queue_mapping:
-            qtype = self.queue_mapping[qtype]
+        await self._remove_from_queues(member, ctx, qtype)
 
-        message_parts = []
-        for queue_name, queue_data in self.queues.items():
-            if qtype and qtype != queue_name:
-                continue
-            if member.id in queue_data["members"]:
-                queue_data["members"].remove(member.id)
-                message_parts.append(f"{queue_name} ({len(queue_data['members'])}/{queue_data['size']})")
-
-        await ctx.send(embed=discord.Embed(description=f"`{member.display_name}` has been removed from {', '.join(message_parts)}.", color=0xff0000))
-
-        # Save the changes to the cache
-        self.save_queue_to_cache()
 
     def is_member_offline(self, member):
         return member.status == discord.Status.offline
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=5)
     async def check_queues(self):
         for guild in self.bot.guilds:
             for queue_name, queue_data in self.queues.items():
                 members_to_remove = []  # Store members to remove after iterating through the queue
+                messages_to_send = set()  # Store messages to send after iterating through the queue
+
                 for member_data in queue_data["members"]:
                     member_id = member_data["id"]
                     member = guild.get_member(member_id)
@@ -266,19 +261,34 @@ class QueueCog(commands.Cog):
                         members_to_remove.append(member_data)
                         continue
 
-                    # Remove members who have been in the queue for over 180 minutes
-                    if time.time() - member_data["joined_at"] > 180 * 60:
+                    # Use the most recent addition time to check for 180 minutes expiry
+                    last_added_time = self.user_last_added_time.get(member_id, 0)
+                    elapsed_time = time.time() - last_added_time
+
+                    if elapsed_time > 180 * 60:
                         members_to_remove.append(member_data)
+                        messages_to_send.add((f"{member.mention} You have been removed from all queues due to being AFK for over 180 minutes.", member_data["channel_id"], member_data["guild_id"]))
                         continue
 
                     # Remove members who are offline and have been offline for over 20 minutes
-                    if self.is_member_offline(member) and time.time() - member_data["joined_at"] > 20 * 60:
+                    if self.is_member_offline(member) and elapsed_time > 20 * 60:
                         members_to_remove.append(member_data)
+                        messages_to_send.add((f"{member.mention} You have been removed from the `{queue_name}` queue due to being offline for over 20 minutes.", member_data["channel_id"], member_data["guild_id"]))
                         continue
 
-                # Remove members from the queue after iterating to avoid modifying the list while iterating
+                # Remove members from all queues
                 for member_data in members_to_remove:
-                    queue_data["members"].remove(member_data)
+                    for queue in self.queues.values():
+                        if member_data in queue["members"]:
+                            queue["members"].remove(member_data)
+
+                # Notify the user only once about the removal
+                for msg, channel_id, guild_id in messages_to_send:
+                    specific_guild = self.bot.get_guild(guild_id)
+                    if specific_guild:
+                        channel = specific_guild.get_channel(channel_id)
+                        if channel:
+                            if channel.permissions_for(specific_guild.me).send_messages:
+                                await channel.send(embed=discord.Embed(description=msg, color=0xff0000))
 
             self.save_queue_to_cache()
-
