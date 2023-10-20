@@ -32,6 +32,9 @@ map_commands = {
     'cra': 'Crash',
     'tre': 'TreacherousPass',
     'oce': 'Oceanus',
+    'maz': 'Maze Runner',
+    'air': 'Air Arena Blitz',
+    'and': 'Andromeda',
 }
 map_commands_arena = {
     'wi': 'WalledIn',

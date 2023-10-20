@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 import discord
+import traceback
 from discord.ext import commands, tasks
 from filelock import FileLock
 from discord import Embed
@@ -54,7 +55,6 @@ class TANetworkCog(commands.Cog):
     @tasks.loop(seconds=30)
     async def update_cache(self):
         try:
-            print("Updating cache...")
             # Create subprocess.
             process = await asyncio.create_subprocess_exec(
                 NODE_PATH, 'ta-network-api/index.js',
@@ -139,80 +139,63 @@ class TANetworkCog(commands.Cog):
 
     def process_active_games(self, new_cache):
         if not hasattr(self, 'finished_games'):
-            self.finished_games = set()  # Initialize the set if not present
-
-        def is_game_duration_valid(server):
-            """Utility function to check if game duration is valid."""
-            if 'completionTimestamp' in server and 'startTimestamp' in server:
-                duration = server['completionTimestamp'] - server['startTimestamp']
-                return duration >= 420  # Check if duration is at least 7 minutes
-            return False
-
-        # Debugging: print names of active servers at the start
-        active_server_names = [server['name'] for server_id, server in self.active_games.items()]
-        print(f"Starting Active Servers: {', '.join(active_server_names)}")
+            self.finished_games = set()
 
         # Create a set of server IDs in the new cache
         new_server_ids = {server["id"] for server in new_cache}
 
         for server in new_cache:
             old_server = next((s for s in self.cache if s["id"] == server["id"]), None)
+            
+            gamemode = server.get("map", {}).get("gamemode")
+            scores = server.get("scores", {})
+            bloodEagle_score = scores.get("bloodEagle", 0)
+            diamondSword_score = scores.get("diamondSword", 0)
+            timeRemaining = server.get("timeRemaining", None)
+
+            if old_server:
+                old_scores = old_server.get("scores", {})
+                old_bloodEagle_score = old_scores.get("bloodEagle", 0)
+                old_diamondSword_score = old_scores.get("diamondSword", 0)
+                old_timeRemaining = old_server.get("timeRemaining", None)
+            else:
+                old_bloodEagle_score, old_diamondSword_score, old_timeRemaining = 0, 0, None
 
             # Check 1:
-            if server["map"]["gamemode"] == "CTF":
-                if old_server and (server["scores"]["bloodEagle"] < old_server["scores"]["bloodEagle"] or server["scores"]["diamondSword"] < old_server["scores"]["diamondSword"]):
-                    if is_game_duration_valid(old_server):
-                        self.save_game_to_history(old_server)  # Save the previous state
-                        print(f"[Check 1] Server {old_server['name']} game ended due to score decrease in CTF.")
+            if gamemode == "CTF":
+                if (bloodEagle_score < old_bloodEagle_score) or (diamondSword_score < old_diamondSword_score):
+                    self.save_game_to_history(old_server)
                     continue
-
-            elif server["map"]["gamemode"] == "Arena":
-                if old_server and (server["scores"]["bloodEagle"] > old_server["scores"]["bloodEagle"] or server["scores"]["diamondSword"] > old_server["scores"]["diamondSword"]):
-                    if is_game_duration_valid(old_server):
-                        self.save_game_to_history(old_server)  # Save the previous state
-                        print(f"[Check 1] Server {old_server['name']} game ended due to score increase in Arena.")
+            elif gamemode == "Arena":
+                if (bloodEagle_score > old_bloodEagle_score) or (diamondSword_score > old_diamondSword_score):
+                    self.save_game_to_history(old_server)
                     continue
 
             # Check 2:
             if server["id"] in self.active_games and server["id"] not in new_server_ids:
-                if is_game_duration_valid(old_server):
-                    self.save_game_to_history(old_server)  # Save the previous state
-                    print(f"[Check 2] Server {old_server['name']} game ended due to restart.")
+                self.save_game_to_history(old_server)
                 continue
 
             # Check 3:
-            if server["map"]["gamemode"] == "CTF" and server["timeRemaining"] == 0:
-                if old_server and old_server["timeRemaining"] == 0 and server["timeRemaining"] > old_server["timeRemaining"] and server["timeRemaining"] < 600:  # 10 minutes in seconds
-                    if is_game_duration_valid(server):
-                        self.save_game_to_history(server)
-                        print(f"[Check 3] Server {server['name']} game ended due to overtime in CTF.")
-                    continue
-                elif not old_server or old_server["timeRemaining"] != 0:
-                    continue  # Ignore this update but process the next one to check for overtime
-
-            elif server["map"]["gamemode"] == "Arena" and server["timeRemaining"] == 0:
-                if is_game_duration_valid(server):
+            if gamemode == "CTF" and timeRemaining == 0:
+                if old_timeRemaining and old_timeRemaining == 0 and timeRemaining > old_timeRemaining and timeRemaining < 600:
                     self.save_game_to_history(server)
-                    print(f"[Check 3] Server {server['name']} game ended due to time running out in Arena.")
+                    continue
+                elif not old_timeRemaining or old_timeRemaining != 0:
+                    continue
+            elif gamemode == "Arena" and timeRemaining == 0:
+                self.save_game_to_history(server)
                 continue
 
             # Logic to update finished and active games lists
-            if server["id"] in self.finished_games and (server["scores"]["bloodEagle"] < old_server["scores"]["bloodEagle"] or server["scores"]["diamondSword"] < old_server["scores"]["diamondSword"]):
+            if server["id"] in self.finished_games and (bloodEagle_score < old_bloodEagle_score or diamondSword_score < old_diamondSword_score):
                 self.finished_games.remove(server["id"])
-
-            elif old_server and old_server["timeRemaining"] > server["timeRemaining"] and server["id"] not in self.active_games and server["id"] not in self.finished_games:
+            elif old_timeRemaining and old_timeRemaining > timeRemaining and server["id"] not in self.active_games and server["id"] not in self.finished_games:
                 server["startTimestamp"] = int(time.time())
                 self.active_games[server["id"]] = server
-
             elif server["id"] in self.active_games:
-                if server["scores"]["bloodEagle"] == 1 or server["scores"]["diamondSword"] == 1:
+                if bloodEagle_score == 1 or diamondSword_score == 1:
                     self.finished_games.add(server["id"])
-
-        # Debugging: print names of active servers at the end
-        active_server_names = [server['name'] for server_id, server in self.active_games.items()]
-        print(f"Ending Active Servers: {', '.join(active_server_names)}")
-
-
 
 
     def save_game_to_history(self, server):
