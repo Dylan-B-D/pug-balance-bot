@@ -40,7 +40,7 @@ This project uses the ta-network api to retrieve server info, which can be found
 4. Open a terminal or command prompt, navigate to the bot's directory, and run the following command to install the required Python packages:
 
    ```sh
-   pip install discord.py requests trueskill scipy matplotlib configparser asyncio asyncssh pytz pandas filelock
+   pip install discord.py requests trueskill scipy matplotlib configparser asyncio asyncssh pytz pandas filelock aiohttp
 
 5. Also install these nmp package(s)
    ```sh

@@ -1,5 +1,6 @@
 import discord
 import os
+import json
 from typing import Union
 from discord import Member
 from collections import Counter
@@ -11,12 +12,91 @@ from modules.data_managment import (fetch_data)
 from modules.utilities import parse_game_history_from_channel
 from modules.rating_calculations import calculate_ratings
 from modules.charts import (create_rolling_percentage_chart, plot_game_lengths)
+
 from PIL import Image, ImageDraw, ImageFont
 
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+completed_games_file = os.path.join(DATA_DIR, "completed_games.json")
 
 class StatsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.command(name='serverhistory')
+    async def server_history(self, ctx, *args):
+        try:
+            server_filter = None
+            num_games = 5  # Default number of games to show
+            advanced = False  # Default is compact version
+
+            # Process arguments
+            for arg in args:
+                if arg == "-adv":
+                    advanced = True
+                elif arg.isdigit():
+                    num_games = int(arg)
+                else:
+                    server_filter = arg
+
+            # Load completed games from the JSON file
+            with open(completed_games_file, 'r') as file:
+                games = json.load(file)
+
+            if not games:
+                await ctx.send("No completed games found.")
+                return
+
+            if server_filter:
+                games = [game for game in games if server_filter.lower() in game["name"].lower()]
+
+            games_to_show = games[-num_games:][::-1]
+
+            for game in games_to_show:
+
+                server_name = game["name"]
+                completion_timestamp = datetime.fromtimestamp(game["completionTimestamp"])
+                time_elapsed = time_ago(completion_timestamp)
+                player_names = ", ".join([player["name"] for player in game["players"]])
+                scores = f"BE: {game['scores']['bloodEagle']} - DS: {game['scores']['diamondSword']}"
+
+                # Calculate game duration
+                if "cap" in server_name.lower():
+                    total_duration = 60
+                elif game["map"]["gamemode"] == "Arena":
+                    total_duration = 20
+                elif game["map"]["gamemode"] == "CTF":
+                    total_duration = 25
+                else:
+                    total_duration = 0
+                game_duration = total_duration - game["timeRemaining"] / 60
+
+                # Create embed
+                embed = Embed(color=Colour.blue())
+
+                if advanced:
+                    embed.title = ""
+                    embed.add_field(name="Server Name", value=server_name, inline=True)
+                    embed.add_field(name="Completion Time", value=f"{completion_timestamp.strftime('%Y-%m-%d %H:%M:%S')} ({time_elapsed})", inline=True)
+                    embed.add_field(name="Duration", value=f"{game_duration:.1f} minutes", inline=True)
+                    embed.add_field(name="Players", value=player_names, inline=False)
+                    embed.add_field(name="Scores", value=scores, inline=True)
+                    embed.add_field(name="Map & Mode", value=f"{game['map']['name']} ({game['map']['gamemode']})", inline=True)
+                    embed.add_field(name="Time Remaining", value=f"{game['timeRemaining'] / 60:.1f} minutes", inline=True)
+                else:
+                    embed.title = ""
+                    embed.add_field(name="Server Name", value=server_name, inline=True)
+                    embed.add_field(name="Completed", value=time_elapsed, inline=True)
+                    embed.add_field(name="Scores", value=scores, inline=True)
+                    embed.add_field(name="Time Remaining", value=f"{game['timeRemaining'] / 60:.1f} mins", inline=True)
+
+                await ctx.send(embed=embed)
+
+        except Exception as e:
+            await ctx.send(f"Error fetching completed games info: {e}")
+
+
+
 
     @commands.command()
     async def pli(self, ctx, min_games: int = 30):
