@@ -24,6 +24,7 @@ from cogs.stats import StatsCog
 from cogs.ta_network import TANetworkCog
 from cogs.cache_queues import QueueCacheCog
 from cogs.backup_queue import QueueCog
+from cogs.pug_queue import PugQueueCog
 
 
 # ==============================
@@ -65,6 +66,7 @@ async def on_ready():
     await bot.add_cog(TANetworkCog(bot))
     await bot.add_cog(QueueCacheCog(bot))
     await bot.add_cog(QueueCog(bot))
+    await bot.add_cog(PugQueueCog(bot))
 
 
 @bot.event

@@ -44,43 +44,24 @@ const connection = new LoginServerConnection(server, credentials, config);
 
 async function fetchGameServerList() {
     try {
-        console.error('Total Execution Time: Start');
-        const startTotalTime = Date.now();
-        
-        console.error('Connect Time: Start');
-        const startConnectTime = Date.now();
-        await connection.connect();
-        console.error('Connect Time: End', Date.now() - startConnectTime);
-        
-        console.error('Fetch GameServerList Time: Start');
-        const startFetchListTime = Date.now();
         let gameServerList = await connection.fetch('GameServerList');
-        console.error('Fetch GameServerList Time: End', Date.now() - startFetchListTime);
 
-        // Concurrently fetch specific server info
-        console.error('Fetch Specific Server Info Time: Start');
-        const startFetchInfoTime = Date.now();
-        const promises = gameServerList.map(server => {
-            return (async () => {
-                if (server.numberOfPlayers > 0) {
-                    const specificServerInfo = await connection.fetch('GameServerInfo', server.id);
-                    server.specificServerInfo = specificServerInfo;
-                }
-                return server;
-            })();
+        // Filter out servers without a valid ID
+        const validServers = gameServerList.filter(server => server.id !== undefined && server.id !== null);
+
+        // Concurrently fetch detailed server info using the valid server IDs
+        const promises = validServers.map(server => {
+            return connection.fetch('GameServerInfo', server.id);
         });
-        const resolvedServers = await Promise.all(promises);
-        console.error('Fetch Specific Server Info Time: End', Date.now() - startFetchInfoTime);
+        const detailedServers = await Promise.all(promises);
 
-        console.log(JSON.stringify(resolvedServers));
-        
-        console.error('Total Execution Time: End', Date.now() - startTotalTime);
+        console.log(JSON.stringify(detailedServers));
+    
     } catch (error) {
         console.error('An error occurred:', error);
     }
 }
 
-// Run the function
 fetchGameServerList();
 
 

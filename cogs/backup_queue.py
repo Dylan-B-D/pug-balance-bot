@@ -27,18 +27,14 @@ class QueueCog(commands.Cog):
  
 
     queue_mapping = {
-    "1": "PUG",
-    "2": "2v2",
-    "3": "lag2v2"
+    "1": "PUG"
     }
     
     
     def load_queue_from_cache(self):
         """Load queue and last added times from the cache file if it exists, otherwise return default queue data."""
         default_queues = {
-            "PUG": {"members": [], "size": 14},
-            "2v2": {"members": [], "size": 4},
-            "lag2v2": {"members": [], "size": 4}
+            "PUG": {"members": [], "size": 14}
         }
 
         default_last_added_times = {}
