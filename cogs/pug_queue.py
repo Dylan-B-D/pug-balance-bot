@@ -45,7 +45,10 @@ QUEUE_SIZE_TO_COLOR = {
 
 QUEUE_LOG = {}
 
+# TODO Substitution
+
 # TODO Add offline limit and kick
+
 AFK_TIME_LIMIT_MINUTES = 90 # Default AFK time limit
 AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.json')
 
@@ -108,41 +111,7 @@ class QueueView(discord.ui.View):
             await interaction.response.send_message(response, ephemeral=True)
 
     def generate_updated_embed(self):
-        current_queues = get_current_queues()
-        channel_queues = current_queues.get(str(self.guild_id), {}).get(str(self.channel_id), {})
-
-        # Load ongoing games
-        with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r') as f:
-            ongoing_games = json.load(f)
-
-        # Sort the queues based on their size, largest first
-        sorted_channel_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
-
-        embed = discord.Embed(title="Game Queues", description=f"", color=0x00ff00)
-
-        for queue_name, queue_info in sorted_channel_queues:
-            players_count = len(queue_info.get("members", []))
-            player_names = [player_name_mapping.get(int(player_entry[0]), self.bot.get_guild(self.guild_id).get_member(int(player_entry[0])).display_name) if int(player_entry[0]) in player_name_mapping else None for player_entry in queue_info.get("members", [])]
-            player_names = [name for name in player_names if name is not None]  # Remove any None values
-            player_names_str = ", ".join(player_names) if player_names else ""
-            embed.add_field(name=f"{queue_name} [{players_count}/{queue_info['size']}]", value=f"Players: {player_names_str}", inline=False)
-
-        # Add ongoing games to the embed
-        relevant_ongoing_games = {k: v for k, v in ongoing_games.items() if k.split('-')[1] == str(self.channel_id)}
-        for _, game in relevant_ongoing_games.items():
-            player_names = []
-            for player in game['members']:
-                name = player['name']
-                if player['id'] in game['captains']:
-                    name = f"**(C) {name}**"
-                player_names.append(name)
-            player_names_str = ", ".join(player_names) if player_names else ""
-            embed.add_field(name=f"Ongoing: {game['queue_name']}", value=f"Players: {player_names_str}", inline=False)
-
-        return embed
-
-
-
+        return generate_queue_embed(self.guild_id, self.channel_id, self.bot)
 
 class PugQueueCog(commands.Cog):
 
@@ -244,57 +213,10 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def menu(self, ctx):
-        current_channels = get_current_pug_channels()
-        current_queues = get_current_queues()
-
-        # Load ongoing games
-        file_path = os.path.join(CACHE_DIR, 'ongoing_games.json')
-        if os.path.exists(file_path):
-            try:
-                # Load ongoing games
-                with open(file_path, 'r') as f:
-                    ongoing_games = json.load(f)
-            except json.JSONDecodeError:
-                print("Error decoding JSON from ongoing_games.json.")
-                ongoing_games = {}  # Initialize as an empty dictionary
-            except Exception as e:
-                print(f"Error reading ongoing_games.json: {e}")
-                ongoing_games = {}  # Initialize as an empty dictionary
-        else:
-            print("ongoing_games.json does not exist.")
-            ongoing_games = {}  # Initialize as an empty dictionary
-
-        # Check if the command is being executed in a pug channel
-        if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
-            return
-
-        # Fetch the queues for the pug channel and sort them based on size, largest first
-        channel_queues = current_queues.get(str(ctx.guild.id), {}).get(str(ctx.channel.id), {})
-        sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
-
-        embed = discord.Embed(title="Game Queues", description=f"", color=0x00ff00)
-
-        for queue_name, queue_info in sorted_queues:
-            players_count = len(queue_info.get("members", []))
-            player_names = [player_name_mapping.get(int(player_entry[0]), self.bot.get_guild(ctx.guild.id).get_member(int(player_entry[0])).display_name) if int(player_entry[0]) in player_name_mapping else None for player_entry in queue_info.get("members", [])]
-            player_names = [name for name in player_names if name is not None]  # Remove any None values
-            player_names_str = ", ".join(player_names) if player_names else ""
-            embed.add_field(name=f"{queue_name} [{players_count}/{queue_info['size']}]", value=f"Players: {player_names_str}", inline=False)
-
-        # Add ongoing games to the embed
-        relevant_ongoing_games = {k: v for k, v in ongoing_games.items() if k.split('-')[1] == str(ctx.channel.id)}
-        for _, game in relevant_ongoing_games.items():
-            player_names = []
-            for player in game['members']:
-                name = player['name']
-                if player['id'] in game['captains']:
-                    name = f"**(C) {name}**"
-                player_names.append(name)
-            player_names_str = ", ".join(player_names) if player_names else ""
-            embed.add_field(name=f"Ongoing: {game['queue_name']}", value=f"Players: {player_names_str}", inline=False)
-
-        view = QueueView(channel_queues, ctx.guild.id, ctx.channel.id, ctx.author, self.bot)
+        embed = generate_queue_embed(ctx.guild.id, ctx.channel.id, self.bot)
+        view = QueueView(get_current_queues().get(str(ctx.guild.id), {}).get(str(ctx.channel.id), {}), ctx.guild.id, ctx.channel.id, ctx.author, self.bot)
         await ctx.send(embed=embed, view=view)
+
 
     @commands.command()
     async def log(self, ctx):
@@ -808,6 +730,50 @@ def remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason
     
 
     return f"Removed from `{queue_name}`."
+
+def generate_queue_embed(guild_id, channel_id, bot):
+    current_queues = get_current_queues()
+    channel_queues = current_queues.get(str(guild_id), {}).get(str(channel_id), {})
+    
+    # Load ongoing games
+    with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r') as f:
+        ongoing_games = json.load(f)
+
+    # Sort the queues based on their size, largest first
+    sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
+
+    embed = discord.Embed(title="Game Queues", description=f"", color=0x00ff00)
+
+    for queue_name, queue_info in sorted_queues:
+        players_count = len(queue_info.get("members", []))
+        player_names = [player_name_mapping.get(int(player_entry[0]), bot.get_guild(guild_id).get_member(int(player_entry[0])).display_name) if int(player_entry[0]) in player_name_mapping else None for player_entry in queue_info.get("members", [])]
+        player_names = [name for name in player_names if name is not None]  # Remove any None values
+        player_names_str = ", ".join(player_names) if player_names else ""
+        embed.add_field(name=f"{queue_name} [{players_count}/{queue_info['size']}]", value=f"Players: {player_names_str}", inline=False)
+
+    relevant_ongoing_games = {k: v for k, v in ongoing_games.items() if k.split('-')[1] == str(channel_id)}
+    for _, game in relevant_ongoing_games.items():
+        captain_names = []
+        player_names = []
+        for player in game['members']:
+            name = player['name']
+            if player['id'] in game['captains']:
+                captain_names.append(f"**(C) {name}**")
+            else:
+                player_names.append(name)
+
+        # Combine captain names and player names
+        combined_names_str = ", ".join(captain_names + player_names)
+
+        # Calculate the time since the game started using time.time()
+        now = time.time()
+        minutes_ago = int((now - game["timestamp"]) // 60)
+
+        embed.add_field(name=f"Ongoing: {game['queue_name']} ({minutes_ago} minutes ago)", value=combined_names_str, inline=False)
+
+
+    return embed
+
 
 
 def is_player_in_ongoing_game(player_id):
