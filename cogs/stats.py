@@ -57,7 +57,7 @@ class StatsCog(commands.Cog):
                 server_name = game["name"]
                 completion_timestamp = datetime.fromtimestamp(game["completionTimestamp"])
                 time_elapsed = time_ago(completion_timestamp)
-                player_names = ", ".join([player["name"] for player in game["players"]])
+                player_names = ", ".join([player.get("name", "Unknown Player") for player in game["players"]])
                 scores = f"BE: {game['scores']['bloodEagle']} - DS: {game['scores']['diamondSword']}"
 
                 # Calculate game duration
@@ -74,6 +74,9 @@ class StatsCog(commands.Cog):
                 # Create embed
                 embed = Embed(color=Colour.blue())
 
+                # Safely accessing the map's name
+                map_name = game['map'].get('name', 'Unknown')
+
                 if advanced:
                     embed.title = ""
                     embed.add_field(name="Server Name", value=server_name, inline=True)
@@ -81,7 +84,7 @@ class StatsCog(commands.Cog):
                     embed.add_field(name="Duration", value=f"{game_duration:.1f} minutes", inline=True)
                     embed.add_field(name="Players", value=player_names, inline=False)
                     embed.add_field(name="Scores", value=scores, inline=True)
-                    embed.add_field(name="Map & Mode", value=f"{game['map']['name']} ({game['map']['gamemode']})", inline=True)
+                    embed.add_field(name="Map & Mode", value=f"{map_name} ({game['map']['gamemode']})", inline=True)
                     embed.add_field(name="Time Remaining", value=f"{game['timeRemaining'] / 60:.1f} minutes", inline=True)
                 else:
                     embed.title = ""
@@ -94,6 +97,7 @@ class StatsCog(commands.Cog):
 
         except Exception as e:
             await ctx.send(f"Error fetching completed games info: {e}")
+
 
 
 
