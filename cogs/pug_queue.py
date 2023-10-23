@@ -1,30 +1,33 @@
-import discord
-import os
-import json
+# ---- STANDARD LIBRARY IMPORTS ---- #
 import asyncio
-import time
+import json
+import bson
+import os
 import random
-import trueskill
-
+import time
 from datetime import datetime
+
+# ---- THIRD-PARTY IMPORTS ---- #
+import discord
+import trueskill
+from discord import Colour
 from discord.ext import commands, tasks
 
+# Custom modules
 from data.player_mappings import player_name_mapping
 from modules.data_managment import fetch_data
 from modules.utilities import (send_balanced_teams, check_bot_admin)
 from modules.rating_calculations import calculate_ratings
 
+# ---- CONSTANTS ---- #
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  
-
-# Create a 'data' directory if it doesn't exist
 CACHE_DIR = os.path.join(BASE_DIR, 'cache')
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
-
-# Create a 'data' directory if it doesn't exist
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+
+AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit
+AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.json')
+
+CURRENT_SAVE_VERSION = "1.0" # Formatting version for saving games to json
 
 QUEUE_SIZE_TO_COLOR = {
     2: discord.ButtonStyle.secondary,
@@ -43,14 +46,19 @@ QUEUE_SIZE_TO_COLOR = {
     28: discord.ButtonStyle.secondary,
 }
 
+# ---- LOG OF RECENT BOT INTERACTIONS ---- #
 QUEUE_LOG = {}
 
+# ---- DIRECTORY SETUP ---- #
+# Create directories if they don't exist
+for directory in [CACHE_DIR, DATA_DIR]:
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
 # TODO Substitution
-
 # TODO Add offline limit and kick
+# TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
 
-AFK_TIME_LIMIT_MINUTES = 90 # Default AFK time limit
-AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.json')
 
 class QueueButton(discord.ui.Button):
     def __init__(self, label, queue_view, style=discord.ButtonStyle.primary):
@@ -457,14 +465,17 @@ class PugQueueCog(commands.Cog):
         await ctx.send(response)
 
     @commands.command()
-    async def end(self, ctx):
+    async def end(self, ctx, flag: str = None):
         player_id = ctx.author.id
 
         # Load ongoing games
         with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r') as f:
             ongoing_games = json.load(f)
 
-
+        # Check if the user is admin and provided the -f flag
+        if flag == "-f" and await check_bot_admin(ctx):
+            await forcefully_end_all_games(ctx, ongoing_games)
+            return
 
         # Find the game the user is a captain of
         game_id = None
@@ -488,33 +499,112 @@ class PugQueueCog(commands.Cog):
         if game["channel_id"] != ctx.channel.id:
             return
 
-        game["completion_timestamp"] = time.time()
-        duration = int(game["completion_timestamp"] - game["timestamp"])
-        minutes = duration // 60
-        seconds = duration % 60
-
-        # Generate a unique key for the completed game
-        completed_game_id = f"{game_id}-{int(game['timestamp'] * 1000)}"
-
-        if not os.path.isfile(os.path.join(DATA_DIR, 'completed_games.json')) or os.stat(os.path.join(DATA_DIR, 'completed_games.json')).st_size == 0:
-            with open(os.path.join(DATA_DIR, 'completed_games.json'), 'w') as f:
-                json.dump({}, f)
-
-        with open(os.path.join(DATA_DIR, 'completed_games.json'), 'r+') as f:
-            completed_games = json.load(f)
-            if not isinstance(completed_games, dict):
-                completed_games = {}
-            completed_games[completed_game_id] = game
-            f.seek(0)
-            json.dump(completed_games, f)
-            f.truncate()
+        await end_individual_game(ctx, game_id, game)
 
         # Remove the game from ongoing games
         del ongoing_games[game_id]
         with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'w') as f:
             json.dump(ongoing_games, f)
 
-        descriptions = [
+    @commands.command()
+    async def subuser(self, ctx, *, user_input: str):
+        substitute_id = ctx.author.id
+
+        # Check if the substituting player is in an ongoing game
+        if get_ongoing_game_of_player(substitute_id):
+            embed = discord.Embed(description="You are currently in an ongoing game and cannot substitute for another player.", color=0xff0000)
+            await ctx.send(embed=embed)
+            return
+
+        # Get the user_id of the player to be substituted
+        player_to_be_substituted_id = get_user_id_from_input(ctx, user_input)
+        if not player_to_be_substituted_id:
+            embed = discord.Embed(description="Invalid player mentioned or named.", color=0xff0000)
+            await ctx.send(embed=embed)
+            return
+
+        # Check if the player to be substituted is in an ongoing game
+        ongoing_game_id = get_ongoing_game_of_player(player_to_be_substituted_id)
+        if not ongoing_game_id:
+            embed = discord.Embed(description=f"The player {user_input} is not in an ongoing game.", color=0xff0000)
+            await ctx.send(embed=embed)
+            return
+
+        # Substitute the player
+        with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r+') as f:
+            ongoing_games = json.load(f)
+            game = ongoing_games[ongoing_game_id]
+            for idx, player in enumerate(game["members"]):
+                if player["id"] == player_to_be_substituted_id:
+                    game["members"][idx]["id"] = substitute_id
+                    game["members"][idx]["name"] = player_name_mapping.get(substitute_id, ctx.author.display_name)
+
+            # If the substituted player was a captain, make the new player a captain
+            if player_to_be_substituted_id in game["captains"]:
+                game["captains"].remove(player_to_be_substituted_id)
+                game["captains"].append(substitute_id)
+
+            f.seek(0)
+            json.dump(ongoing_games, f)
+            f.truncate()
+
+        # Remove the substituting player from all queues
+        remove_player_from_all_queues(substitute_id)
+
+        # Send an embed notification
+        embed = discord.Embed(description=f"{ctx.author.display_name} has substituted for {user_input} in the ongoing game.", colour=Colour.green())
+        await ctx.send(embed=embed)
+
+        # Fetch player ratings and assign a default rating if not available
+        data = fetch_data(datetime(2018, 1, 1), datetime.now(), 'NA')
+        default_rating = trueskill.Rating(mu=15, sigma=5)
+        player_ratings, _, _, _ = calculate_ratings(data, queue='NA')
+        game = ongoing_games[ongoing_game_id]
+
+        # Build a list similar to the `players` list in start_game
+        players = [
+            {
+                'id': player["id"],
+                'name': player_name_mapping.get(player["id"], ctx.bot.get_user(player["id"]).name if ctx.bot.get_user(player["id"]) else str(player["id"])),
+                'mu': player_ratings.get(player["id"], default_rating).mu
+            } for player in game["members"]
+        ]
+
+        await send_balanced_teams(ctx.bot, ctx.bot.get_channel(game["channel_id"]), players, player_ratings, game["captains"], data)
+        
+
+async def forcefully_end_all_games(ctx, ongoing_games):
+    for game_id, game in list(ongoing_games.items()):  # Use list() to avoid RuntimeError due to dictionary size change during iteration
+        if game["channel_id"] == ctx.channel.id:
+            del ongoing_games[game_id]
+    with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'w') as f:
+        json.dump(ongoing_games, f)
+    embed = discord.Embed(
+        title="",
+        description="All ongoing games in this channel have been forcefully ended by an admin.",
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed)
+
+def store_completed_game(game_id, game):
+    completed_game_id = f"{game_id}-{int(game['timestamp'] * 1000)}"
+    game["version"] = CURRENT_SAVE_VERSION  # Add version to the game data
+    
+    if not os.path.isfile(os.path.join(DATA_DIR, 'completed_games.json')) or os.stat(os.path.join(DATA_DIR, 'completed_games.json')).st_size == 0:
+        with open(os.path.join(DATA_DIR, 'completed_games.json'), 'w') as f:
+            json.dump({}, f)
+    with open(os.path.join(DATA_DIR, 'completed_games.json'), 'r+') as f:
+        completed_games = json.load(f)
+        if not isinstance(completed_games, dict):
+            completed_games = {}
+        completed_games[completed_game_id] = game
+        f.seek(0)
+        json.dump(completed_games, f)
+        f.truncate()
+
+
+def generate_game_end_description(game, minutes, seconds):
+    descriptions = [
             f"The game in `{{queue_name}}` took {minutes} minutes and {seconds} seconds. Another one for the history books, wouldn't you say?",
             f"And there we have it! `{{queue_name}}` wrapped up in {minutes} minutes and {seconds} seconds. Splendid game, everyone!",
             f"Ah, `{{queue_name}}` has come to an end after {minutes} minutes. Quite the quick match, right?",
@@ -530,15 +620,45 @@ class PugQueueCog(commands.Cog):
             f"A round of applause for the players of `{{queue_name}}`! Concluded in a mere {minutes} minutes!",
             f"Jolly good show in `{{queue_name}}`! Wrapped up neatly in {minutes} minutes!"
         ]
+    chosen_description = random.choice(descriptions)
+    return chosen_description.format(**game)
 
-        chosen_description = random.choice(descriptions)
+async def end_individual_game(ctx, game_id, game):
+    game["completion_timestamp"] = time.time()
+    duration = int(game["completion_timestamp"] - game["timestamp"])
+    minutes = duration // 60
+    seconds = duration % 60
 
-        embed = discord.Embed(
-            title="",
-            description=chosen_description.format(**game),  # Using **game to unpack the dictionary into the format method
-            color=discord.Color.blue()
-        )
-        await ctx.send(embed=embed)
+    # Store the game as completed
+    store_completed_game(game_id, game)
+
+    # Create and send embed
+    embed_description = generate_game_end_description(game, minutes, seconds)
+    embed = discord.Embed(
+        title="",
+        description=embed_description,
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed)
+
+def get_ongoing_game_of_player(player_id):
+    """Check if a player is in an ongoing game and return the game_id if found."""
+    # Path to the ongoing games file
+    file_path = os.path.join(CACHE_DIR, 'ongoing_games.json')
+    
+    # If the ongoing games file doesn't exist, return None
+    if not os.path.exists(file_path):
+        return None
+
+    with open(file_path, 'r') as f:
+        ongoing_games = json.load(f)
+
+    for game_id, game in ongoing_games.items():
+        for player in game["members"]:
+            if player_id == player["id"]:
+                return game_id
+
+    return None
 
 
 def get_user_id_from_input(ctx, user_input):
@@ -557,6 +677,7 @@ def get_user_id_from_input(ctx, user_input):
     return member.id if member else None
 
 
+
 async def start_game(bot, guild_id, channel_id, queue_name, members):
     data = fetch_data(datetime(2018, 1, 1), datetime.now(), 'NA')
     # Fetch player ratings and assign a default rating if not available
@@ -570,8 +691,6 @@ async def start_game(bot, guild_id, channel_id, queue_name, members):
             'mu': player_ratings.get(member[0], default_rating).mu
         } for member in members
     ]
-
-    # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
 
     # Randomly select 2 captains and extract their 'id' values to match the expected format
     captain_dicts = random.sample(players, 2)
@@ -629,6 +748,7 @@ async def start_game(bot, guild_id, channel_id, queue_name, members):
         f.seek(0)
         json.dump(ongoing_games, f)
         f.truncate()
+        
 
     # Remove all members from all queues
     for member in [m["id"] for m in ongoing_game["members"]]:
@@ -645,7 +765,7 @@ def add_player_to_queue(guild_id, channel_id, queue_name, player_id, bot):
     current_queues = get_current_queues()
 
     if is_player_in_ongoing_game(player_id):
-        return "You are currently in an ongoing game and cannot join a new queue."
+        return "You are currently in an ongoing game and cannot join a new queue. Captains can use `!end` to finish the game"
 
     # Check if the server and channel are valid
     if str(guild_id) not in current_queues:
@@ -734,15 +854,19 @@ def remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason
 def generate_queue_embed(guild_id, channel_id, bot):
     current_queues = get_current_queues()
     channel_queues = current_queues.get(str(guild_id), {}).get(str(channel_id), {})
-    
-    # Load ongoing games
-    with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r') as f:
-        ongoing_games = json.load(f)
+
+    # Check if ongoing games file exists
+    file_path = os.path.join(CACHE_DIR, 'ongoing_games.json')
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            ongoing_games = json.load(f)
+    else:
+        ongoing_games = {}
 
     # Sort the queues based on their size, largest first
     sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
 
-    embed = discord.Embed(title="Game Queues", description=f"", color=0x00ff00)
+    embed = discord.Embed(title="Game Queues", description=f"", colour=Colour.green())
 
     for queue_name, queue_info in sorted_queues:
         players_count = len(queue_info.get("members", []))
@@ -771,8 +895,8 @@ def generate_queue_embed(guild_id, channel_id, bot):
 
         embed.add_field(name=f"Ongoing: {game['queue_name']} ({minutes_ago} minutes ago)", value=combined_names_str, inline=False)
 
-
     return embed
+
 
 
 

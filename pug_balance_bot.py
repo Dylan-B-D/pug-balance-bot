@@ -4,6 +4,7 @@ from datetime import datetime
 
 # Third-party Libraries
 import discord
+import aiohttp
 from discord.ext import commands
 
 # Bot Data
@@ -57,6 +58,15 @@ bot.remove_command('help')
 async def on_ready():
     print(f'Logged in as {bot.user}')
 
+    # Update bot's avatar
+    async with aiohttp.ClientSession() as session:
+        async with session.get('https://i.ibb.co/54cQcDj/eclipse2.jpg') as response:
+            if response.status == 200:
+                data = await response.read()
+                await bot.user.edit(avatar=data)
+            else:
+                print("Failed to fetch the avatar image.")
+
     # Add cogs to bot
     await bot.add_cog(UtilitiesCog(bot))
     await bot.add_cog(DebugsCog(bot))
@@ -64,8 +74,8 @@ async def on_ready():
     await bot.add_cog(ServerManagementCog(bot))
     await bot.add_cog(StatsCog(bot))
     await bot.add_cog(TANetworkCog(bot))
-    await bot.add_cog(QueueCacheCog(bot))
-    await bot.add_cog(QueueCog(bot))
+    # await bot.add_cog(QueueCacheCog(bot))
+    # await bot.add_cog(QueueCog(bot))
     await bot.add_cog(PugQueueCog(bot))
 
 
