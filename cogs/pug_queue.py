@@ -1,6 +1,5 @@
 # ---- STANDARD LIBRARY IMPORTS ---- #
 import asyncio
-import json
 import bson
 import os
 import random
@@ -21,13 +20,13 @@ from modules.rating_calculations import calculate_ratings
 
 # ---- CONSTANTS ---- #
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  
-CACHE_DIR = os.path.join(BASE_DIR, 'cache')
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+CACHE_DIR = os.path.join(BASE_DIR, 'cache', 'gamequeue')
+DATA_DIR = os.path.join(BASE_DIR, 'data', 'gamequeue')
 
 AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit
-AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.json')
+AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.bson')
 
-CURRENT_SAVE_VERSION = "1.0" # Formatting version for saving games to json
+CURRENT_SAVE_VERSION = "1.0" # Formatting version for saving games to BSON
 
 QUEUE_SIZE_TO_COLOR = {
     2: discord.ButtonStyle.secondary,
@@ -58,7 +57,7 @@ for directory in [CACHE_DIR, DATA_DIR]:
 # TODO Substitution
 # TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
-
+# TODO Add subcaptaining
 
 class QueueButton(discord.ui.Button):
     def __init__(self, label, queue_view, style=discord.ButtonStyle.primary):
@@ -150,11 +149,9 @@ class PugQueueCog(commands.Cog):
                         # print(f"Updated timestamp for {interaction.user.name} in queue {queue_name} due to interaction.")
                         break
 
-        # Save the updated queues to the JSON file
+        # Save the updated queues to the BSON file
         if player_updated:  # Only save if we made an update
-            with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-                json.dump(current_queues, f)
-
+            save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
 
 
     @tasks.loop(minutes=0.1)
@@ -214,10 +211,10 @@ class PugQueueCog(commands.Cog):
                         # print(f"Updated timestamp for {message.author.name} in queue {queue_name}.")
                         break
 
-        # Save the updated queues to the JSON file
+        # Save the updated queues to the BSON file
         if player_updated:  # Only save if we made an update
-            with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-                json.dump(current_queues, f)
+            save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
+
 
     @commands.command()
     async def menu(self, ctx):
@@ -288,14 +285,9 @@ class PugQueueCog(commands.Cog):
         await asyncio.sleep(10)
         await message.delete()
 
-        # Save the server and channel ID to a JSON file
-        data = {
-            "server_id": ctx.guild.id,
-            "channel_id": ctx.channel.id
-        }
         current_channels[str(ctx.guild.id)] = str(ctx.channel.id)
-        with open(os.path.join(DATA_DIR, 'pug_channel.json'), 'w') as f:
-            json.dump(current_channels, f)
+        save_to_bson(current_channels, os.path.join(DATA_DIR, 'pug_channel.bson'))
+
 
 
 
@@ -320,13 +312,13 @@ class PugQueueCog(commands.Cog):
         await asyncio.sleep(10)
         await message.delete()
 
-        # Remove the channel from the JSON file
+        # Remove the channel from the BSON file
         del current_channels[str(ctx.guild.id)]
-        with open(os.path.join(DATA_DIR, 'pug_channel.json'), 'w') as f:
-            json.dump(current_channels, f)
+        save_to_bson(current_channels, os.path.join(DATA_DIR, 'pug_channel.bson'))
+
 
     @commands.command()
-    async def createqueue(self, ctx, queuename: str, queuesize: int):
+    async def createqueue(self, ctx, queuename: str = None, queuesize: int = None):
 
         if not await check_bot_admin(ctx):
             return
@@ -335,6 +327,18 @@ class PugQueueCog(commands.Cog):
 
         # Check if the command is being executed in a pug channel
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            embed = discord.Embed(title="", 
+                                description=f"This is not a pug channel. Please use `!setpugchannel` to set the pug channel.", 
+                                color=discord.Color.red())
+            await ctx.send(embed=embed)
+            return
+
+        # Check for missing parameters
+        if not queuename or not queuesize:
+            embed = discord.Embed(title="", 
+                                description=f"Incorrect usage. Use the command as:\n`!createqueue <queuename> <queuesize>` where `<queuename>` is the name of the queue and `<queuesize>` is the size of the queue.", 
+                                color=discord.Color.red())
+            await ctx.send(embed=embed)
             return
 
         # Load current queues
@@ -348,7 +352,6 @@ class PugQueueCog(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-
         # Add the new queue
         if str(ctx.guild.id) not in current_queues:
             current_queues[str(ctx.guild.id)] = {}
@@ -361,13 +364,13 @@ class PugQueueCog(commands.Cog):
         }
 
         # Save the updated queues
-        with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-            json.dump(current_queues, f)
+        save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
 
         embed = discord.Embed(title="", 
                                 description=f"Queue '{queuename}' with size {queuesize} has been created.", 
                                 color=discord.Color.green())
         await ctx.send(embed=embed)
+
 
     @commands.command()
     async def removequeue(self, ctx, queuename: str):
@@ -401,8 +404,8 @@ class PugQueueCog(commands.Cog):
             del current_queues[str(ctx.guild.id)]
 
         # Save the updated queues
-        with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-            json.dump(current_queues, f)
+        save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
+
 
         await ctx.send(f"Queue '{queuename}' has been removed.")
 
@@ -469,8 +472,8 @@ class PugQueueCog(commands.Cog):
         player_id = ctx.author.id
 
         # Load ongoing games
-        with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r') as f:
-            ongoing_games = json.load(f)
+        ongoing_games = load_from_bson(os.path.join(CACHE_DIR, 'ongoing_games.bson'))
+
 
         # Check if the user is admin and provided the -f flag
         if flag == "-f" and await check_bot_admin(ctx):
@@ -502,9 +505,8 @@ class PugQueueCog(commands.Cog):
         await end_individual_game(ctx, game_id, game)
 
         # Remove the game from ongoing games
-        del ongoing_games[game_id]
-        with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'w') as f:
-            json.dump(ongoing_games, f)
+        del ongoing_games[game_id]     
+        save_to_bson(ongoing_games, os.path.join(CACHE_DIR, 'ongoing_games.bson'))
 
     @commands.command()
     async def subuser(self, ctx, *, user_input: str):
@@ -530,23 +532,24 @@ class PugQueueCog(commands.Cog):
             await ctx.send(embed=embed)
             return
 
+        # Load the ongoing games
+        ongoing_games = load_from_bson(os.path.join(CACHE_DIR, 'ongoing_games.bson'))
+        game = ongoing_games[ongoing_game_id]
+
         # Substitute the player
-        with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r+') as f:
-            ongoing_games = json.load(f)
-            game = ongoing_games[ongoing_game_id]
-            for idx, player in enumerate(game["members"]):
-                if player["id"] == player_to_be_substituted_id:
-                    game["members"][idx]["id"] = substitute_id
-                    game["members"][idx]["name"] = player_name_mapping.get(substitute_id, ctx.author.display_name)
+        for idx, player in enumerate(game["members"]):
+            if player["id"] == player_to_be_substituted_id:
+                game["members"][idx]["id"] = substitute_id
+                game["members"][idx]["name"] = player_name_mapping.get(substitute_id, ctx.author.display_name)
 
-            # If the substituted player was a captain, make the new player a captain
-            if player_to_be_substituted_id in game["captains"]:
-                game["captains"].remove(player_to_be_substituted_id)
-                game["captains"].append(substitute_id)
+        # If the substituted player was a captain, make the new player a captain
+        if player_to_be_substituted_id in game["captains"]:
+            game["captains"].remove(player_to_be_substituted_id)
+            game["captains"].append(substitute_id)
 
-            f.seek(0)
-            json.dump(ongoing_games, f)
-            f.truncate()
+        # Save the modified ongoing games back to the file
+        save_to_bson(ongoing_games, os.path.join(CACHE_DIR, 'ongoing_games.bson'))
+
 
         # Remove the substituting player from all queues
         remove_player_from_all_queues(substitute_id)
@@ -574,11 +577,12 @@ class PugQueueCog(commands.Cog):
         
 
 async def forcefully_end_all_games(ctx, ongoing_games):
-    for game_id, game in list(ongoing_games.items()):  # Use list() to avoid RuntimeError due to dictionary size change during iteration
+    for game_id, game in list(ongoing_games.items()):  
         if game["channel_id"] == ctx.channel.id:
             del ongoing_games[game_id]
-    with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'w') as f:
-        json.dump(ongoing_games, f)
+    
+    save_to_bson(ongoing_games, os.path.join(CACHE_DIR, 'ongoing_games.bson'))
+        
     embed = discord.Embed(
         title="",
         description="All ongoing games in this channel have been forcefully ended by an admin.",
@@ -588,19 +592,16 @@ async def forcefully_end_all_games(ctx, ongoing_games):
 
 def store_completed_game(game_id, game):
     completed_game_id = f"{game_id}-{int(game['timestamp'] * 1000)}"
-    game["version"] = CURRENT_SAVE_VERSION  # Add version to the game data
+    game["version"] = CURRENT_SAVE_VERSION  
+
+    completed_games = load_from_bson(os.path.join(DATA_DIR, 'completed_games.bson'))
+    if not isinstance(completed_games, dict):
+        completed_games = {}
     
-    if not os.path.isfile(os.path.join(DATA_DIR, 'completed_games.json')) or os.stat(os.path.join(DATA_DIR, 'completed_games.json')).st_size == 0:
-        with open(os.path.join(DATA_DIR, 'completed_games.json'), 'w') as f:
-            json.dump({}, f)
-    with open(os.path.join(DATA_DIR, 'completed_games.json'), 'r+') as f:
-        completed_games = json.load(f)
-        if not isinstance(completed_games, dict):
-            completed_games = {}
-        completed_games[completed_game_id] = game
-        f.seek(0)
-        json.dump(completed_games, f)
-        f.truncate()
+    completed_games[completed_game_id] = game
+
+    save_to_bson(completed_games, os.path.join(DATA_DIR, 'completed_games.bson'))
+
 
 
 def generate_game_end_description(game, minutes, seconds):
@@ -644,14 +645,13 @@ async def end_individual_game(ctx, game_id, game):
 def get_ongoing_game_of_player(player_id):
     """Check if a player is in an ongoing game and return the game_id if found."""
     # Path to the ongoing games file
-    file_path = os.path.join(CACHE_DIR, 'ongoing_games.json')
+    file_path = os.path.join(CACHE_DIR, 'ongoing_games.bson')
     
     # If the ongoing games file doesn't exist, return None
     if not os.path.exists(file_path):
         return None
 
-    with open(file_path, 'r') as f:
-        ongoing_games = json.load(f)
+    ongoing_games = load_from_bson(file_path)
 
     for game_id, game in ongoing_games.items():
         for player in game["members"]:
@@ -727,8 +727,8 @@ async def start_game(bot, guild_id, channel_id, queue_name, members):
         except Exception as e:
             print(f"Failed to send DM to {player['name']}. Error: {e}")
 
-    # Store the game to ongoing_games.json
-    game_id = f"{guild_id}-{channel_id}-{queue_name}"
+    # Store the game to ongoing_games.bson
+    game_id = f"{guild_id}-{channel_id}-{queue_name}-{int(time.time())}"
     ongoing_game = {
         "members": [{"id": player["id"], "name": player["name"]} for player in players],
         "captains": captains,
@@ -738,16 +738,19 @@ async def start_game(bot, guild_id, channel_id, queue_name, members):
         "channel_id": channel_id
     }
 
-    # Save the game to ongoing_games.json
-    if not os.path.exists(os.path.join(CACHE_DIR, 'ongoing_games.json')):
-        with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'w') as f:
-            json.dump({}, f)
-    with open(os.path.join(CACHE_DIR, 'ongoing_games.json'), 'r+') as f:
-        ongoing_games = json.load(f)
-        ongoing_games[game_id] = ongoing_game
-        f.seek(0)
-        json.dump(ongoing_games, f)
-        f.truncate()
+    ongoing_games_path = os.path.join(CACHE_DIR, 'ongoing_games.bson')
+
+    # If the file doesn't exist, create an empty BSON file
+    if not os.path.exists(ongoing_games_path):
+        save_to_bson({}, ongoing_games_path)
+
+    # Load the ongoing games
+    ongoing_games = load_from_bson(ongoing_games_path)
+    ongoing_games[game_id] = ongoing_game
+
+    # Save the modified ongoing games back to the file
+    save_to_bson(ongoing_games, ongoing_games_path)
+
         
 
     # Remove all members from all queues
@@ -795,9 +798,9 @@ def add_player_to_queue(guild_id, channel_id, queue_name, player_id, bot):
     elif full_queues:
         queue["members"].remove((player_id, current_timestamp))
 
-    # Save the updated queues to the JSON file
-    with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-        json.dump(current_queues, f)
+    # Save the updated queues to the BSON file
+    save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
+
 
     # Update the log after adding the player
     player_name = player_name_mapping.get(int(player_id))
@@ -830,9 +833,9 @@ def remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason
         return "Player not in the queue."
     queue["members"].remove(player_entry)
 
-    # Save the updated queues to the JSON file
-    with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-        json.dump(current_queues, f)
+    # Save the updated queues to the BSON file
+    save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
+
 
     # Update the log after removing the player
     player_name = player_name_mapping.get(int(player_id))
@@ -856,12 +859,9 @@ def generate_queue_embed(guild_id, channel_id, bot):
     channel_queues = current_queues.get(str(guild_id), {}).get(str(channel_id), {})
 
     # Check if ongoing games file exists
-    file_path = os.path.join(CACHE_DIR, 'ongoing_games.json')
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
-            ongoing_games = json.load(f)
-    else:
-        ongoing_games = {}
+    file_path = os.path.join(CACHE_DIR, 'ongoing_games.bson')
+    ongoing_games = load_from_bson(file_path)
+
 
     # Sort the queues based on their size, largest first
     sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
@@ -903,26 +903,22 @@ def generate_queue_embed(guild_id, channel_id, bot):
 def is_player_in_ongoing_game(player_id):
     """Check if a player is in an ongoing game."""
     # Path to the ongoing games file
-    file_path = os.path.join(CACHE_DIR, 'ongoing_games.json')
+    file_path = os.path.join(CACHE_DIR, 'ongoing_games.bson')
     
-    # If the ongoing games file doesn't exist, create an empty one
-    if not os.path.exists(file_path):
-        with open(file_path, 'w') as f:
-            json.dump({}, f)
-        return False  # Player can't be in an ongoing game if the file was just created
+    # Load ongoing games, will be an empty dictionary if the file doesn't exist
+    ongoing_games = load_from_bson(file_path)
+    
+    if not ongoing_games:
+        return False  # Player can't be in an ongoing game if no games are present
 
-    # If the file does exist, check the player's presence in it
-    with open(file_path, 'r') as f:
-        ongoing_games = json.load(f)
-        for game in ongoing_games.values():
-            if any(member["id"] == player_id for member in game["members"]):  # Check for player_id in member dictionaries
-                return True
+    # Check the player's presence in the ongoing games
+    for game in ongoing_games.values():
+        if any(member["id"] == player_id for member in game["members"]):  # Check for player_id in member dictionaries
+            return True
 
     return False
 
 
-
-# Utility function to remove a player from all queues across all servers
 def remove_player_from_all_queues(player_id):
     current_queues = get_current_queues()
     for guild_id, channels in current_queues.items():
@@ -931,41 +927,36 @@ def remove_player_from_all_queues(player_id):
                 player_entry = next((entry for entry in queue_data["members"] if entry[0] == player_id), None)
                 if player_entry:
                     queue_data["members"].remove(player_entry)
-    with open(os.path.join(DATA_DIR, 'queues.json'), 'w') as f:
-        json.dump(current_queues, f)
+    save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
 
 def get_current_queues():
-    try:
-        with open(os.path.join(DATA_DIR, 'queues.json'), 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
+    return load_from_bson(os.path.join(CACHE_DIR, 'queues.bson'))
 
 def get_current_pug_channels():
-    try:
-        with open(os.path.join(DATA_DIR, 'pug_channel.json'), 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    
+    return load_from_bson(os.path.join(DATA_DIR, 'pug_channel.bson'))
+
 def save_afk_time(guild_id, channel_id, minutes):
-    if not os.path.exists(AFK_TIMES_FILE):
-        afk_times = {}
-    else:
-        with open(AFK_TIMES_FILE, 'r') as f:
-            afk_times = json.load(f)
+    afk_times = load_from_bson(AFK_TIMES_FILE)
     
     if str(guild_id) not in afk_times:
         afk_times[str(guild_id)] = {}
     afk_times[str(guild_id)][str(channel_id)] = minutes
     
-    with open(AFK_TIMES_FILE, 'w') as f:
-        json.dump(afk_times, f)
+    save_to_bson(afk_times, AFK_TIMES_FILE)
 
 def get_afk_time(guild_id, channel_id):
-    if not os.path.exists(AFK_TIMES_FILE):
-        return AFK_TIME_LIMIT_MINUTES
-    with open(AFK_TIMES_FILE, 'r') as f:
-        afk_times = json.load(f)
+    afk_times = load_from_bson(AFK_TIMES_FILE)
     return afk_times.get(str(guild_id), {}).get(str(channel_id), AFK_TIME_LIMIT_MINUTES)
+
+
+def save_to_bson(data, filepath):
+    """Save the data to a BSON file."""
+    with open(filepath, 'wb') as f:
+        f.write(bson.BSON.encode(data))
+
+def load_from_bson(filepath):
+    """Load data from a BSON file. If the file doesn't exist, return an empty dictionary."""
+    if not os.path.exists(filepath):
+        return {}
+    with open(filepath, 'rb') as f:
+        return bson.BSON(f.read()).decode()
