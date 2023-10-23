@@ -4,6 +4,7 @@ import bson
 import os
 import random
 import time
+from collections import defaultdict, Counter
 from datetime import datetime
 
 # ---- THIRD-PARTY IMPORTS ---- #
@@ -57,6 +58,9 @@ for directory in [CACHE_DIR, DATA_DIR]:
 # TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
 # TODO Add subcaptaining
+# TODO Make sure that commands only work in correct channel
+# TODO Enable Disable for whole queue
+# TODO Slash Commands
 
 class QueueButton(discord.ui.Button):
     def __init__(self, label, queue_view, style=discord.ButtonStyle.primary):
@@ -217,6 +221,12 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def menu(self, ctx):
+        current_channels = get_current_pug_channels()
+
+        # Check if the command is being executed in a pug channel
+        if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+
         embed = generate_queue_embed(ctx.guild.id, ctx.channel.id, self.bot)
         view = QueueView(get_current_queues().get(str(ctx.guild.id), {}).get(str(ctx.channel.id), {}), ctx.guild.id, ctx.channel.id, ctx.author, self.bot)
         await ctx.send(embed=embed, view=view)
@@ -577,6 +587,28 @@ class PugQueueCog(commands.Cog):
 
         await send_balanced_teams(ctx.bot, ctx.bot.get_channel(game["channel_id"]), players, player_ratings, game["captains"], data)
         
+    @commands.command()
+    async def gamestats(self, ctx):
+        current_channels = get_current_pug_channels()
+
+        # Check if the channel is not set
+        if str(ctx.channel.id) not in current_channels.values():
+            return
+
+        completed_games = load_from_bson(os.path.join(DATA_DIR, 'completed_games.bson'))
+        games_per_queue, last_game_timestamps, top_players = game_stats_for_channel(completed_games, ctx.channel.id)
+
+        embed = discord.Embed(title="Game Statistics", color=Colour.green())
+        for queue_name, game_count in games_per_queue.items():
+            time_since_last = format_time_since(last_game_timestamps[queue_name])
+            embed.add_field(name=queue_name, value=f"{game_count} games, last game {time_since_last}", inline=False)
+
+        top_players_str = "\n".join([f"{player_name_mapping.get(player_id, player_id)}: {count} games" for player_id, count in top_players])
+        embed.add_field(name="Top 5 players", value=top_players_str, inline=False)
+
+        await ctx.send(embed=embed)
+
+
 
 async def forcefully_end_all_games(ctx, ongoing_games):
     for game_id, game in list(ongoing_games.items()):  
@@ -601,7 +633,7 @@ def store_completed_game(game_id, game):
         completed_games = {}
     
     completed_games[completed_game_id] = game
-
+    print(completed_games)
     save_to_bson(completed_games, os.path.join(DATA_DIR, 'completed_games.bson'))
 
 
@@ -662,6 +694,40 @@ def get_ongoing_game_of_player(player_id):
 
     return None
 
+def game_stats_for_channel(completed_games, channel_id):
+    games_per_queue = defaultdict(int)
+    last_game_timestamps = {}
+    player_participation = Counter()
+
+    for game_key, game_info in completed_games.items():
+        # Filter out games not related to the specified channel
+        if str(channel_id) != game_key.split('-')[1]:
+            continue
+
+        queue_name = game_info["queue_name"]
+        games_per_queue[queue_name] += 1
+
+        # Update last game timestamp
+        completion_time = game_info["completion_timestamp"]
+        if queue_name not in last_game_timestamps or completion_time > last_game_timestamps[queue_name]:
+            last_game_timestamps[queue_name] = completion_time
+
+        # Count player participation
+        for player in game_info["members"]:
+            player_participation[player["id"]] += 1
+
+    return games_per_queue, last_game_timestamps, player_participation.most_common(5)
+
+def format_time_since(timestamp):
+    now = time.time()
+    elapsed_seconds = int(now - timestamp)
+    if elapsed_seconds < 60:
+        return f"{elapsed_seconds}s ago"
+    elapsed_minutes = elapsed_seconds // 60
+    if elapsed_minutes < 60:
+        return f"{elapsed_minutes}m ago"
+    elapsed_hours = elapsed_minutes // 60
+    return f"{elapsed_hours}h ago"
 
 def get_user_id_from_input(ctx, user_input):
     # Check if the input is a mention
@@ -708,26 +774,9 @@ async def start_game(bot, guild_id, channel_id, queue_name, members):
     )
     await channel.send(embed=game_started_embed)
 
-    # Create an embed for direct messages
-    dm_embed = discord.Embed(
-        title="Game Started!",
-        description=f"The game has started in queue `{queue_name}`. All game info should be in the PUGs channel.",
-        color=discord.Color.green()
-    )
-    dm_embed.add_field(name="Captains", value=", ".join([player_name_mapping.get(captain, bot.get_user(captain).name) for captain in captains]), inline=True)
-    
-    # Exclude captains from players list
-    non_captain_players = [player["name"] for player in players if player["id"] not in captains]
-    dm_embed.add_field(name="Players", value=", ".join(non_captain_players), inline=True)
-
     # Send the embed to all players in the game
     for player in players:
-        try:
-            user = bot.get_user(player["id"])
-            if user:
-                await user.send(embed=dm_embed)
-        except Exception as e:
-            print(f"Failed to send DM to {player['name']}. Error: {e}")
+        await send_game_start_dm(bot, player, queue_name, captains, players)
 
     # Store the game to ongoing_games.bson
     game_id = f"{guild_id}-{channel_id}-{queue_name}-{int(time.time())}"
@@ -774,9 +823,9 @@ def add_player_to_queue(guild_id, channel_id, queue_name, player_id, bot):
 
     # Check if the server and channel are valid
     if str(guild_id) not in current_queues:
-        return "Invalid server."
+        return
     if str(channel_id) not in current_queues[str(guild_id)]:
-        return "Invalid channel."
+        return
     if queue_name not in current_queues[str(guild_id)][str(channel_id)]:
         return "Invalid queue."
 
@@ -823,9 +872,9 @@ def remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason
 
     # Check if the server and channel are valid
     if str(guild_id) not in current_queues:
-        return "Invalid server."
+        return
     if str(channel_id) not in current_queues[str(guild_id)]:
-        return "Invalid channel."
+        return
     if queue_name not in current_queues[str(guild_id)][str(channel_id)]:
         return "Invalid queue."
 
@@ -864,7 +913,6 @@ def generate_queue_embed(guild_id, channel_id, bot):
     file_path = os.path.join(CACHE_DIR, 'ongoing_games.bson')
     ongoing_games = load_from_bson(file_path)
 
-
     # Sort the queues based on their size, largest first
     sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
 
@@ -873,9 +921,9 @@ def generate_queue_embed(guild_id, channel_id, bot):
     for queue_name, queue_info in sorted_queues:
         players_count = len(queue_info.get("members", []))
         player_names = [player_name_mapping.get(int(player_entry[0]), bot.get_guild(guild_id).get_member(int(player_entry[0])).display_name) if int(player_entry[0]) in player_name_mapping else None for player_entry in queue_info.get("members", [])]
-        player_names = [name for name in player_names if name is not None]  # Remove any None values
-        player_names_str = ", ".join(player_names) if player_names else ""
-        embed.add_field(name=f"{queue_name} [{players_count}/{queue_info['size']}]", value=f"Players: {player_names_str}", inline=False)
+        player_names = [f"`{name}`" for name in player_names if name is not None]  # Wrap in backticks and remove any None values
+        player_names_str = " ".join(player_names)
+        embed.add_field(name=f"{queue_name} ({players_count}/{queue_info['size']})", value=player_names_str, inline=False)
 
     relevant_ongoing_games = {k: v for k, v in ongoing_games.items() if k.split('-')[1] == str(channel_id)}
     for _, game in relevant_ongoing_games.items():
@@ -884,12 +932,12 @@ def generate_queue_embed(guild_id, channel_id, bot):
         for player in game['members']:
             name = player['name']
             if player['id'] in game['captains']:
-                captain_names.append(f"**(C) {name}**")
+                captain_names.append(f"**(C) `{name}`**")
             else:
-                player_names.append(name)
+                player_names.append(f"`{name}`")
 
         # Combine captain names and player names
-        combined_names_str = ", ".join(captain_names + player_names)
+        combined_names_str = " ".join(captain_names + player_names)
 
         # Calculate the time since the game started using time.time()
         now = time.time()
@@ -898,7 +946,6 @@ def generate_queue_embed(guild_id, channel_id, bot):
         embed.add_field(name=f"Ongoing: {game['queue_name']} ({minutes_ago} minutes ago)", value=combined_names_str, inline=False)
 
     return embed
-
 
 
 
@@ -962,3 +1009,50 @@ def load_from_bson(filepath):
         return {}
     with open(filepath, 'rb') as f:
         return bson.BSON(f.read()).decode()
+
+async def send_game_start_dm(bot, player, queue_name, captains, players):
+    user = bot.get_user(player["id"])
+    if not user:
+        print(f"Failed to find user for {player['name']}.")
+        return
+    
+    # Generate a random message for the embed
+    embed_description = random_game_start_message(player["name"], queue_name)
+    
+    embed = discord.Embed(title="Good day!", description=embed_description, color=0x3498db)
+    embed.add_field(name="Captains", value=", ".join([player_name_mapping.get(captain, bot.get_user(captain).name) for captain in captains]), inline=True)
+    
+    # Exclude captains from players list for the DM
+    non_captain_players = [p["name"] for p in players if p["id"] not in captains]
+    embed.add_field(name="Players", value=", ".join(non_captain_players), inline=True)
+
+    try:
+        await user.send(embed=embed)
+    except Exception as e:
+        print(f"Failed to send DM to {player['name']}. Error: {e}")
+
+def random_game_start_message(player_name, queue_name):
+    messages = [
+        f"Dear Sir/Madam {player_name},\n\nI hope this message finds you in good spirits. I am most delighted to inform you that the game `{queue_name}` is now underway. Would you be so kind as to direct your esteemed attention to the main channel for further particulars?\n\nWith utmost respect and anticipation, \nYour Trusty Bot",
+        
+        f"Salutations, {player_name}!\n\nA match of `{queue_name}` beckons! I trust you'll grace us with your distinguished presence? To the main channel, posthaste!\n\nYour ever-loyal, \nBot Jeeves",
+        
+        f"Ah, the illustrious {player_name}!\n\nThe game of `{queue_name}` calls to us once more. Shall we dive into another enthralling chapter of digital jousting?\n\nIn eager await, \nSir Bottington III",
+        
+        f"My dear {player_name},\n\n`{queue_name}` is afoot! Gather your digital steed and sally forth to the main channel! For glory and pixels!\n\nYours in pixelated camaraderie, \nLord Pixelbot",
+        
+        f"{player_name}, dear compatriot,\n\nThe siren song of `{queue_name}` beckons. I dare say, one might even call it... an addiction? To the main channel with you!\n\nTreading the fine line of obsession, \nThe Bot Therapist",
+        
+        f"Greetings, {player_name}!\n\nAnother round of `{queue_name}`, the very game that has ensnared so many hearts (and free time). To the main channel, for another dance with fate!\n\nYour ever-enthusiastic enabler, \nDr. Botenstein",
+        
+        f"Ahoy, {player_name}!\n\n`{queue_name}` awaits, that seductive siren of the digital seas. Will you heed its call and plunge into the abyss? To the main channel, brave sailor!\n\nYour trusty first mate, \nCaptain Botbeard",
+        
+        f"Esteemed {player_name},\n\nThe game of `{queue_name}` calls, much like the moth to the flame. Will it be ecstasy or agony this time? Only the main channel holds the answer.\n\nIntrigued and slightly concerned, \nThe Bot Oracle",
+        
+        f"Dear {player_name},\n\nIt is said that in every game of `{queue_name}`, a tale of heroism and heartbreak unfolds. To the main channel, let's pen today's saga!\n\nYour bard and chronicler, \nBot Shakespeare",
+        
+        f"Salve, {player_name}!\n\nOnce more unto the breach, dear friend! The game of `{queue_name}` is afoot. To the main channel, for honor and... well, mostly fun.\n\nYour comrade in arms, \nSir Bot-a-lot",
+        
+        f"My dear {player_name},\n\nAnother game of `{queue_name}`, another chance to prove one's mettle, or perhaps to descend further into delightful madness. To the main channel, for our next escapade!\n\nWith a twinkle in my circuits, \nThe Mischievous Bot Bob"
+    ]
+    return random.choice(messages)

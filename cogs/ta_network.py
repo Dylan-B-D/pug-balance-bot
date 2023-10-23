@@ -286,7 +286,7 @@ class TANetworkCog(commands.Cog):
         with open(completed_games_file, 'w') as f:
             json.dump(completed_games, f)
 
-        remove_duplicate_games()
+        # remove_duplicate_games()
     
 
 

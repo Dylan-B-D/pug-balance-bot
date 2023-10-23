@@ -1,27 +1,43 @@
 # pug-balance-bot
-This project uses the ta-network api to retrieve server info, which can be found here:
+This project uses the ta-network-api made by Giga to retrieve server info, which can be found here:
 [ta-network api GitHub](https://github.com/wilderzone/ta-network-api)
 
 # Available commands
-1. !clear  -  Restricted command to clear the bot's messages from the last 10 mins.
-2. !debug  -  Admin-only command for debugging ID matching results for previous game.
-3. !gamelengths  -  Shows a graph of game lengths over time.
-4. !gamehistory  -  Shows the last few maps played (Max 10). Usage: !gamehistory [optional_history_count].
-5. !help - Shows a list of commands and how to use them.
-6. !info  -  Shows map weighting for generated games, and voting thresholds.
-7. !kill  -  Elevated-admin command to shutdown docker containers. Usage: !kill [container].
-8. !listadmins  -  Lists all the admins.
-9. !match - Restricted command for simulating a game starting.
-10. !ranks  -  Restricted command to show player ranks.
-11. !servers  -  Shows server list for 'PUG Login'.
-12. !serverstats  -  Gets some simple stats for the PUG queues.
-13. !setmap - Admin only command for setting the PUG/2v2 map. Returns list of map IDs if no parameter given. Usage: !setmap [map_id].
-14. !setname  -  Sets the player's username which is used to display stats/balanced teams etc. Usage: !setname [@User][new_username].
-15. !showstats - Shows some basic stats for a given player. Usage: !showstats [@User].
-16. !startgame  -  Restricted debug command to simulate when teams have been picked.
-17. !status - Shows server status for PUGs with no param, or shows status for Mixers with a param of '2'. Usage: !status [optional_server_index].
-18. !getcapvalues - Shows a list of players cap values, where 1 is always cap, and 0 is never cap.
-19. !setcapvalue - Sets a users cap value. Usage: setcapvalue [@User][capvalue]
+
+1. !adduser  - Usage: !adduser user_input queue_name
+2. !clear  - Restricted command to clear the bot's messages from the last 10 mins.
+3. !createqueue  - Usage: !createqueue [optional_queuename] [optional_queuesize].
+4. !debug  - Admin-only command for debugging ID matching results for the previous game.
+5. !end  - Usage: !end [optional_flag].
+6. !gamehistory  - Shows the last few maps played (Max 10). Usage: !gamehistory [optional_history_count].
+7. !gamelengths  - Shows a graph of game lengths over time. Usage: !gamelengths [optional_queue].
+8. !gamestats
+9. !getcapvalues - Shows a list of players cap values, where 1 is always cap, and 0 is never cap.
+10. !help - Shows a list of commands and how to use them.
+11. !info  - Shows map weighting for generated games, and voting thresholds.
+12. !kill  - Elevated-admin command to shutdown docker containers. Usage: !kill [optional_container].
+13. !listadmins  - Lists all the admins.
+14. !listplayers  - Usage: !listplayers [optional_min_games].
+15. !log
+16. !match - Restricted command for simulating a game starting.
+17. !menu
+18. !pli  - Usage: !pli [optional_min_games].
+19. !pugsettings
+20. !ranks  - Restricted command to show player ranks. Usage: !ranks [optional_min_games].
+21. !removepugchannel
+22. !removequeue  - Usage: !removequeue queuename.
+23. !removeuser  - Usage: !removeuser user_input queue_name.
+24. !servers  - Shows server list for 'PUG Login'.
+25. !setafktime  - Usage: !setafktime minutes.
+26. !setcapvalue - Sets a user's cap value. Usage: !setcapvalue [optional_@User] [optional_value].
+27. !setmap - Admin only command for setting the PUG/2v2 map. Returns a list of map IDs if no parameter given. Usage: !setmap [optional_map_shortcut] [optional_server_num].
+28. !setname  - Sets the player's username which is used to display stats/balanced teams etc. Usage: !setname [@User] new_username.
+29. !setpugchannel
+30. !showstats - Shows some basic stats for a given player. Usage: !showstats [@User or username].
+31. !startgame  - Restricted debug command to simulate when teams have been picked.
+32. !status - Shows server status for PUGs with no param, or shows status for Mixers with a param of '2'. Usage: !status [optional_server_index].
+33. !subuser  - Usage: !subuser user_input.
+34. !serverstats  - Gets some simple stats for the PUG queues.
 
 
 ## Requirements
