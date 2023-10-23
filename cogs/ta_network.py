@@ -38,6 +38,7 @@ class TANetworkCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.cache = None
+        self.finished_arena_games = set()
         self.previous_cache = []
         self.last_status_message = None
         self.cache = self.load_current_cache()
@@ -65,11 +66,23 @@ class TANetworkCog(commands.Cog):
             # Wait for the subprocess to finish and get the stdout and stderr.
             stdout, stderr = await process.communicate()
 
+            decoded_stderr = stderr.decode().strip()
+            decoded_stdout = stdout.decode().strip()
+
+            # Log the content of stdout and stderr for debugging purposes.
+            # print(f"Subprocess stdout: {decoded_stdout}")
+            # print(f"Subprocess stderr: {decoded_stderr}")
+
             # Check the returncode to see if subprocess exited with an error.
             if process.returncode != 0:
-                raise Exception(f"Subprocess exited with error: {stderr.decode().strip()}")
+                print(f"Subprocess returned a non-zero exit code: {process.returncode}")
+                raise Exception(f"Subprocess exited with error: {decoded_stderr}")
 
-            new_cache = json.loads(stdout.decode().strip())
+            if not decoded_stdout:
+                print("Subprocess stdout is empty. Skipping JSON parsing.")
+                return
+
+            new_cache = json.loads(decoded_stdout)
             self.process_active_games(new_cache)
 
             with open(CACHE_FILE_PATH, 'w') as f:
@@ -131,8 +144,14 @@ class TANetworkCog(commands.Cog):
             # Update the current cache
             self.cache = new_cache
 
+        except FileNotFoundError:
+            print("Error: JSON file not found.")
+        except json.JSONDecodeError:
+            print("Error: Failed to decode JSON from subprocess output.")
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
         except Exception as e:
-            print(f"An error occurred while updating the cache: {e}")
+            print(f"An unexpected error occurred while updating the cache: {e}")
             print("Traceback (most recent call last):")
             traceback.print_exc()
 
@@ -173,15 +192,29 @@ class TANetworkCog(commands.Cog):
             else:
                 old_bloodEagle_score, old_diamondSword_score, old_timeRemaining = 0, 0, None
 
-            # Check 1:
-            if gamemode == "CTF":
-                if (bloodEagle_score < old_bloodEagle_score) or (diamondSword_score < old_diamondSword_score):
-                    self.save_game_to_history(old_server)
+            # Check for Arena game completion
+            if gamemode == "Arena":
+                if timeRemaining == 0:
+                    if server["id"] not in self.finished_arena_games:
+                        self.save_game_to_history(server)
+                        self.finished_arena_games.add(server["id"])
+                        continue
+                else:
+                    # If the time resets, assume a new game has started
+                    if old_timeRemaining == 0 and timeRemaining > old_timeRemaining:
+                        self.finished_arena_games.remove(server["id"])
+                    # If the score increases, save the game to history
+                    elif (bloodEagle_score > old_bloodEagle_score) or (diamondSword_score > old_diamondSword_score):
+                        self.save_game_to_history(server)
+                        continue
+            # Existing CTF logic
+            elif gamemode == "CTF" and timeRemaining == 0:
+                if old_timeRemaining and old_timeRemaining == 0 and timeRemaining > old_timeRemaining and timeRemaining < 600:
+                    self.save_game_to_history(server)
                     continue
-            elif gamemode == "Arena":
-                if (bloodEagle_score > old_bloodEagle_score) or (diamondSword_score > old_diamondSword_score):
-                    self.save_game_to_history(old_server)
+                elif not old_timeRemaining or old_timeRemaining != 0:
                     continue
+
 
             # Check 2:
             if server["id"] in self.active_games and server["id"] not in new_server_ids:
@@ -252,6 +285,8 @@ class TANetworkCog(commands.Cog):
         # Save the updated list
         with open(completed_games_file, 'w') as f:
             json.dump(completed_games, f)
+
+        remove_duplicate_games()
     
 
 
@@ -384,6 +419,28 @@ class TANetworkCog(commands.Cog):
             await ctx.send(embed=error_embed)
     
 
+def remove_duplicate_games():
+    completed_games_file = os.path.join(DATA_DIR, "completed_games.json")
+    
+    # Step 1: Load the completed_games.json file into memory.
+    with open(completed_games_file, 'r') as file:
+        games = json.load(file)
+
+    unique_games = {}
+    
+    # Step 2 and 3: Process each game and store in unique_games.
+    for game in games:
+        # Create a unique key for the game excluding the completionTimestamp.
+        key = json.dumps({k: v for k, v in game.items() if k != "completionTimestamp"})
+        if key not in unique_games:
+            unique_games[key] = game
+
+    # Step 5: Write the cleaned data back to completed_games.json.
+    with open(completed_games_file, 'w') as file:
+        json.dump(list(unique_games.values()), file)
+
+    print(f"Original number of games: {len(games)}")
+    print(f"Number of games after removing duplicates: {len(unique_games)}")
 
 
 

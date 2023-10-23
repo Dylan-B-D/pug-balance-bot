@@ -40,42 +40,45 @@ class StatsCog(commands.Cog):
                     server_filter = arg
 
             # Load completed games from the JSON file
-            with open(completed_games_file, 'r') as file:
-                games = json.load(file)
-
-            if not games:
+            try:
+                with open(completed_games_file, 'r') as file:
+                    games = json.load(file)
+            except FileNotFoundError:
                 await ctx.send("No completed games found.")
                 return
 
+            # Filter out games that don't have the required data
+            games = [game for game in games if all(key in game for key in ["name", "completionTimestamp", "players", "scores", "map", "timeRemaining"])]
+
             if server_filter:
-                games = [game for game in games if server_filter.lower() in game["name"].lower()]
+                games = [game for game in games if server_filter.lower() in game.get("name", "").lower()]
 
             games_to_show = games[-num_games:][::-1]
 
             for game in games_to_show:
-
-                server_name = game["name"]
-                completion_timestamp = datetime.fromtimestamp(game["completionTimestamp"])
+                # Access values safely using get with default values
+                server_name = game.get("name", "Unknown Server")
+                completion_timestamp = datetime.fromtimestamp(game.get("completionTimestamp", 0))
                 time_elapsed = time_ago(completion_timestamp)
-                player_names = ", ".join([player.get("name", "Unknown Player") for player in game["players"]])
-                scores = f"BE: {game['scores']['bloodEagle']} - DS: {game['scores']['diamondSword']}"
+                player_names = ", ".join([player.get("name", "Unknown Player") for player in game.get("players", [])])
+                scores = f"BE: {game.get('scores', {}).get('bloodEagle', 0)} - DS: {game.get('scores', {}).get('diamondSword', 0)}"
 
                 # Calculate game duration
                 if "cap" in server_name.lower():
                     total_duration = 60
-                elif game["map"]["gamemode"] == "Arena":
+                elif game.get("map", {}).get("gamemode", "") == "Arena":
                     total_duration = 20
-                elif game["map"]["gamemode"] == "CTF":
+                elif game.get("map", {}).get("gamemode", "") == "CTF":
                     total_duration = 25
                 else:
                     total_duration = 0
-                game_duration = total_duration - game["timeRemaining"] / 60
+                game_duration = total_duration - game.get("timeRemaining", 0) / 60
 
                 # Create embed
                 embed = Embed(color=Colour.blue())
 
                 # Safely accessing the map's name
-                map_name = game['map'].get('name', 'Unknown')
+                map_name = game.get('map', {}).get('name', 'Unknown')
 
                 if advanced:
                     embed.title = ""
@@ -95,8 +98,12 @@ class StatsCog(commands.Cog):
 
                 await ctx.send(embed=embed)
 
+        except FileNotFoundError:
+            await ctx.send("No completed games found.")
         except Exception as e:
-            await ctx.send(f"Error fetching completed games info: {e}")
+            # Here, instead of exposing the actual error, you can log it for debugging purposes
+            # but send a generic message to the user.
+            print(f"Error fetching completed games info: {e}")
 
 
 

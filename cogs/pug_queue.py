@@ -54,7 +54,6 @@ for directory in [CACHE_DIR, DATA_DIR]:
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-# TODO Substitution
 # TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
 # TODO Add subcaptaining
@@ -154,7 +153,7 @@ class PugQueueCog(commands.Cog):
             save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
 
 
-    @tasks.loop(minutes=0.1)
+    @tasks.loop(minutes=1)
     async def check_stale_users(self):
         current_queues = get_current_queues()
         now = datetime.utcnow().timestamp()
@@ -507,6 +506,9 @@ class PugQueueCog(commands.Cog):
         # Remove the game from ongoing games
         del ongoing_games[game_id]     
         save_to_bson(ongoing_games, os.path.join(CACHE_DIR, 'ongoing_games.bson'))
+        
+        # Invoke the menu command
+        await self.menu(ctx)
 
     @commands.command()
     async def subuser(self, ctx, *, user_input: str):
