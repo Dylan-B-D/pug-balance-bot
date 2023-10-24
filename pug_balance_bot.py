@@ -59,13 +59,13 @@ async def on_ready():
     print(f'Logged in as {bot.user}')
 
     # Update bot's avatar
-    async with aiohttp.ClientSession() as session:
-        async with session.get('https://i.ibb.co/54cQcDj/eclipse2.jpg') as response:
-            if response.status == 200:
-                data = await response.read()
-                await bot.user.edit(avatar=data)
-            else:
-                print("Failed to fetch the avatar image.")
+    # async with aiohttp.ClientSession() as session:
+    #     async with session.get('https://i.ibb.co/54cQcDj/eclipse2.jpg') as response:
+    #         if response.status == 200:
+    #             data = await response.read()
+    #             await bot.user.edit(avatar=data)
+    #         else:
+    #             print("Failed to fetch the avatar image.")
 
     # Add cogs to bot
     await bot.add_cog(UtilitiesCog(bot))

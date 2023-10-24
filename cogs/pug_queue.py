@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 
 # Custom modules
 from data.player_mappings import player_name_mapping
-from modules.data_managment import fetch_data
+from modules.data_managment import fetch_data, save_to_bson, load_from_bson
 from modules.utilities import (send_balanced_teams, check_bot_admin)
 from modules.rating_calculations import calculate_ratings
 
@@ -59,8 +59,7 @@ for directory in [CACHE_DIR, DATA_DIR]:
 
 # TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
-# TODO Add maps
-# TODO Fix send balanced teams embed
+# TODO Fix send balanced teams embed, add arena
 # TODO Slash Commands
 
 class QueueButton(discord.ui.Button):
@@ -349,8 +348,19 @@ class PugQueueCog(commands.Cog):
 
         try:
             if action not in ["add", "remove", "modify"]:
-                await ctx.send("Invalid action. Use 'add', 'remove', or 'modify'.")
+                embed = discord.Embed(
+                    title="Invalid Action",
+                    description="Please use 'add', 'remove', or 'modify'.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
                 return
+
+            action_past_tense = {
+                "add": "added",
+                "remove": "removed",
+                "modify": "modified"
+            }
 
             if action == "add":
                 map_data[map_name] = float(weight)
@@ -360,10 +370,21 @@ class PugQueueCog(commands.Cog):
                 map_data[map_name] = float(weight)
 
             save_to_bson(map_data, filepath)
-            await ctx.send(f"Map `{map_name}` {action}ed successfully!")
-
+            
+            embed = discord.Embed(
+                title="Success",
+                description=f"Map `{map_name}` {action_past_tense[action]} successfully!",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+            
         except Exception as e:
-            await ctx.send(f"Error: {e}")
+            embed = discord.Embed(
+                title="Error",
+                description=f"An error occurred: {e}",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
 
 
 
@@ -536,7 +557,7 @@ class PugQueueCog(commands.Cog):
 
         if not await check_bot_admin(ctx):
             return
-        
+
         current_channels = get_current_pug_channels()
         current_queues = get_current_queues()
 
@@ -548,39 +569,51 @@ class PugQueueCog(commands.Cog):
         # Fetch the pug channel(s) for this server
         pug_channel_id = current_channels[str(ctx.guild.id)]
         pug_channel = self.bot.get_channel(int(pug_channel_id))
-        
-        embed = discord.Embed(title="Pug Settings", description=f"Pug Channel(s) in {ctx.guild.name}", color=0x00ff00)
-        
+
+        embed = discord.Embed(title="Pug Settings", description=f"Pug Settings in {ctx.guild.name}", color=0x00ff00)
+
+        content = ""
+
         # If there's a valid pug channel, add its details to the embed
         if pug_channel:
-            embed.add_field(name="Pug Channel", value=pug_channel.name, inline=False)
+            content += f"**Pug Channel:** `{pug_channel.name}`\n"
 
             # Fetch the queues for the pug channel
             channel_queues = current_queues.get(str(ctx.guild.id), {}).get(pug_channel_id, {})
             for queue_name, queue_info in channel_queues.items():
-                embed.add_field(name=f"Queue: {queue_name}", value=f"Size: {queue_info['size']}", inline=False)
-            
+                content += f"**Queue:** `{queue_name}` (Size: {queue_info['size']})\n"
+
             # Add AFK time for the server channel
             afk_time = get_afk_time(ctx.guild.id, ctx.channel.id)
-            embed.add_field(name="AFK Time", value=f"{afk_time} minutes", inline=False)
-            
+            content += f"**AFK Time:** `{afk_time} minutes`\n"
+
             # Add bans in server channel
             bans = load_bans()
             banned_users = bans.get(str(ctx.guild.id), {}).get(pug_channel_id, [])
             banned_usernames = [self.bot.get_user(int(uid)).display_name for uid in banned_users if self.bot.get_user(int(uid))]
-            if banned_usernames:
-                embed.add_field(name="Banned Users", value=", ".join(banned_usernames), inline=False)
-            else:
-                embed.add_field(name="Banned Users", value="No users banned", inline=False)
-            
+            content += f"**Banned Users:** `{', '.join(banned_usernames) if banned_usernames else 'None'}`\n"
+
             # Add enabled / disabled status in server channel
             queue_status = "Enabled" if is_queue_enabled(ctx) else "Disabled"
-            embed.add_field(name="Queue Status", value=queue_status, inline=False)
-            
-        else:
-            embed.add_field(name="Error", value="Couldn't fetch the pug channel details.", inline=False)
+            content += f"**Queue Status:** `{queue_status}`\n"
 
+        else:
+            content += "Error: Couldn't fetch the pug channel details.\n"
+
+        # Load the map weights and arena map weights from BSON
+        map_weights = load_from_bson(os.path.join(DATA_DIR, 'map_weights.bson'))
+        arena_map_weights = load_from_bson(os.path.join(DATA_DIR, 'arena_map_weights.bson'))
+
+        # Add the maps with their weights to the content
+        content += "\n**Maps and Weights:**\n"
+        content += "\n".join([f"- `{map_name}`  `{weight}`" for map_name, weight in map_weights.items()])
+        
+        content += "\n\n**Arena Maps and Weights:**\n"
+        content += "\n".join([f"- `{map_name}`  `{weight if weight is not None else 'N/A'}`" for map_name, weight in arena_map_weights.items()])
+
+        embed.description = content
         await ctx.send(embed=embed)
+
 
 
     @commands.command()
@@ -596,7 +629,7 @@ class PugQueueCog(commands.Cog):
         if not is_queue_enabled(ctx):
             return
 
-        user_id = get_user_id_from_input(ctx, user_input)
+        user_id = await get_user_id_from_input(ctx, user_input)
         if user_id is None:
             await ctx.send(f"User `{user_input}` not found!")
             return
@@ -618,7 +651,7 @@ class PugQueueCog(commands.Cog):
         if not is_queue_enabled(ctx):
             return
 
-        user_id = get_user_id_from_input(ctx, user_input)
+        user_id = await get_user_id_from_input(ctx, user_input)
         if user_id is None:
             await ctx.send(f"User `{user_input}` not found!")
             return
@@ -697,7 +730,7 @@ class PugQueueCog(commands.Cog):
             return
 
         # Get the user_id of the player to be substituted
-        player_to_be_substituted_id = get_user_id_from_input(ctx, user_input)
+        player_to_be_substituted_id = await get_user_id_from_input(ctx, user_input)
         if not player_to_be_substituted_id:
             embed = discord.Embed(description="Invalid player mentioned or named.", color=0xff0000)
             await ctx.send(embed=embed)
@@ -818,9 +851,14 @@ class PugQueueCog(commands.Cog):
         if not await check_bot_admin(ctx):
             return
 
-        user_id = get_user_id_from_input(ctx, user_input)
+        user_id = await get_user_id_from_input(ctx, user_input)
         if user_id is None:
-            await ctx.send(f"User `{user_input}` not found!")
+            embed = discord.Embed(
+                title="",
+                description=f"User `{user_input}` not found!",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
             return
 
         # Ban the user
@@ -831,7 +869,12 @@ class PugQueueCog(commands.Cog):
         for queue_name in current_queues[str(ctx.guild.id)][str(ctx.channel.id)]:
             remove_player_from_queue(ctx.guild.id, ctx.channel.id, queue_name, user_id)
         
-        await ctx.send(f"User `{user_input}` has been banned from joining queues in this channel.")
+        embed = discord.Embed(
+            title="",
+            description=f"User `{user_input}` has been banned from joining queues in this channel.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
 
 
     @commands.command()
@@ -839,15 +882,26 @@ class PugQueueCog(commands.Cog):
         if not await check_bot_admin(ctx):
             return
 
-        user_id = get_user_id_from_input(ctx, user_input)
+        user_id = await get_user_id_from_input(ctx, user_input)
         if user_id is None:
-            await ctx.send(f"User `{user_input}` not found!")
+            embed = discord.Embed(
+                title="",
+                description=f"User `{user_input}` not found!",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
             return
 
         # Unban the user
         unban_user(ctx.guild.id, ctx.channel.id, user_id)
         
-        await ctx.send(f"User `{user_input}` has been unbanned from joining queues in this channel.")
+        embed = discord.Embed(
+            title="",
+            description=f"User `{user_input}` has been unbanned from joining queues in this channel.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
 
 
 def is_queue_enabled(ctx):
@@ -979,20 +1033,36 @@ def format_time_since(timestamp):
     elapsed_hours = elapsed_minutes // 60
     return f"{elapsed_hours}h ago"
 
-def get_user_id_from_input(ctx, user_input):
-    # Check if the input is a mention
+async def get_user_id_from_input(ctx, user_input):
+    # 1. Check if the input is a mention
     if user_input.startswith('<@') and user_input.endswith('>'):
-        user_id = user_input.strip('<@!>')
-        return int(user_id)
+        return int(user_input.strip('<@!>'))
 
-    # If the input is not a mention, check the player_name_mapping
+    # 2. Use the player_name_mapping
+    # Check if the exact name exists in the mapping
     reverse_mapping = {v: k for k, v in player_name_mapping.items()}
     if user_input in reverse_mapping:
         return reverse_mapping[user_input]
-
-    # If not in the mapping, check the server members by name/nickname
+    
+    # 3. Check the server members by name/nickname
     member = discord.utils.find(lambda m: m.name == user_input or m.display_name == user_input, ctx.guild.members)
-    return member.id if member else None
+    if member:
+        return member.id
+    
+    # 4. Do a partial match search
+    # Check if a partial name exists in the mapping
+    possible_ids = [k for k, v in player_name_mapping.items() if user_input.lower() in v.lower()]
+    if possible_ids:
+        if len(possible_ids) == 1:  # If only one possible match is found
+            return possible_ids[0]
+        else:
+            # Handle multiple partial matches (e.g., send a message to ask user to be more specific)
+            await ctx.send(f"Multiple players found with the name {user_input}. Please be more specific.")
+            return None
+
+    # If no match is found
+    await ctx.send(f"Cannot find a player with the name {user_input}.")
+    return None
 
 
 
@@ -1261,19 +1331,6 @@ def save_afk_time(guild_id, channel_id, minutes):
 def get_afk_time(guild_id, channel_id):
     afk_times = load_from_bson(AFK_TIMES_FILE)
     return afk_times.get(str(guild_id), {}).get(str(channel_id), AFK_TIME_LIMIT_MINUTES)
-
-
-def save_to_bson(data, filepath):
-    """Save the data to a BSON file."""
-    with open(filepath, 'wb') as f:
-        f.write(bson.BSON.encode(data))
-
-def load_from_bson(filepath):
-    """Load data from a BSON file. If the file doesn't exist, return an empty dictionary."""
-    if not os.path.exists(filepath):
-        return {}
-    with open(filepath, 'rb') as f:
-        return bson.BSON(f.read()).decode()
     
 def load_bans():
     return load_from_bson(BANS_FILE)

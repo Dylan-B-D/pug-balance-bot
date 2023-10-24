@@ -41,6 +41,7 @@ map_weights = load_from_bson(os.path.join(DATA_DIR, 'map_weights.bson'))
 maps, weights = zip(*map_weights.items())
 selected_map = random.choices(maps, weights, k=1)[0]
 
+
 # Configuration File Parsing
 config = configparser.ConfigParser()
 try:
@@ -227,17 +228,6 @@ async def match_ids(channel, embed):
     most_recent_matched_ids[channel.id] = matched_results
     return matched_results
 
-
-
-
-def pick_two_maps():
-    """
-    Randomly picks two maps to be played.
-    """
-    selected_maps = random.choices(maps, weights, k=2)
-    while selected_maps[0] == selected_maps[1]:
-        selected_maps = random.choices(maps, weights, k=2)
-    return selected_maps
 
 async def initialize_data(data):
     game_data = data  # Replace with the actual game data
