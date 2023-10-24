@@ -24,9 +24,11 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 CACHE_DIR = os.path.join(BASE_DIR, 'cache', 'gamequeue')
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'gamequeue')
 
-AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit
 AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.bson')
+QUEUE_STATUS_FILE = os.path.join(DATA_DIR, 'queue_status.bson')
+BANS_FILE = os.path.join(DATA_DIR, 'bans.bson')
 
+AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit
 CURRENT_SAVE_VERSION = "1.0" # Formatting version for saving games to BSON
 
 QUEUE_SIZE_TO_COLOR = {
@@ -57,12 +59,11 @@ for directory in [CACHE_DIR, DATA_DIR]:
 
 # TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
-# TODO Add subcaptaining
-# TODO Add banning
 # TODO Add maps
 # TODO Fix send balanced teams embed
-# TODO Enable Disable for whole queue
 # TODO Slash Commands
+# TODO Serverhistory should show players per team 
+# TODO Add info to !pugsettings
 
 class QueueButton(discord.ui.Button):
     def __init__(self, label, queue_view, style=discord.ButtonStyle.primary):
@@ -139,8 +140,6 @@ class PugQueueCog(commands.Cog):
         if interaction.user.bot:
             return
 
-        # print(f"Interaction received from {interaction.user.name}. Checking for update...")
-
         guild_id = interaction.guild.id
         current_queues = get_current_queues()
         player_updated = False
@@ -151,7 +150,6 @@ class PugQueueCog(commands.Cog):
                     if player_id == interaction.user.id:
                         queue_data["members"][idx] = (player_id, datetime.utcnow().timestamp())
                         player_updated = True
-                        # print(f"Updated timestamp for {interaction.user.name} in queue {queue_name} due to interaction.")
                         break
 
         # Save the updated queues to the BSON file
@@ -173,8 +171,7 @@ class PugQueueCog(commands.Cog):
                 for queue_name, queue_data in queues.items():
                     for player_id, timestamp in list(queue_data["members"]):  # Use list to avoid runtime errors due to size changes
                         time_difference = now - timestamp
-                        # print(f"Checking {player_name_mapping.get(int(player_id))}. Time since last message: {time_difference} seconds.")
-                        if time_difference > afk_time_for_channel*60:  # Using the specific AFK time here
+                        if time_difference > afk_time_for_channel*60:
                             response = remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason="afk")
                             if response:
                                 removals.setdefault((player_id, channel_id), {}).setdefault('queues', []).append(queue_name)
@@ -188,9 +185,8 @@ class PugQueueCog(commands.Cog):
             embed_pm = discord.Embed(description=f"You were removed from {queues_str} due to being AFK for more than {removal_data['afk_time']} minutes.", color=0xff0000)
             await user.send(embed=embed_pm)
             
-            # print(f"Removed {player_name_mapping.get(int(player_id))} from {queues_str}.")
-            
             channel = self.bot.get_channel(int(channel_id))
+
             # Send an embed indicating the user was removed due to being AFK
             embed_msg = discord.Embed(description=f"{player_name_mapping.get(int(player_id))} was removed from {queues_str} for being AFK for more than {removal_data['afk_time']} minutes.", color=0xff0000)
             await channel.send(embed=embed_msg)
@@ -200,8 +196,6 @@ class PugQueueCog(commands.Cog):
     async def on_message(self, message):
         if message.author.bot:
             return
-
-        # print(f"Message received from {message.author.name}. Checking for update...")
 
         guild_id = message.guild.id
         current_queues = get_current_queues()
@@ -213,7 +207,6 @@ class PugQueueCog(commands.Cog):
                     if player_id == message.author.id:
                         queue_data["members"][idx] = (player_id, datetime.utcnow().timestamp())
                         player_updated = True
-                        # print(f"Updated timestamp for {message.author.name} in queue {queue_name}.")
                         break
 
         # Save the updated queues to the BSON file
@@ -223,6 +216,9 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def menu(self, ctx):
+        if not is_queue_enabled(ctx):
+            return
+        
         current_channels = get_current_pug_channels()
 
         # Check if the command is being executed in a pug channel
@@ -236,6 +232,9 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def log(self, ctx):
+        if not is_queue_enabled(ctx):
+            return
+                
         header = "================= [ QUEUE LOG ] ================="
         footer = "=" * len(header)
         log_entries = [header]
@@ -263,11 +262,25 @@ class PugQueueCog(commands.Cog):
         await ctx.send(f"```\n{log_message}\n```")
 
     @commands.command()
-    async def setafktime(self, ctx, minutes: float):
+    async def setafktime(self, ctx, minutes: float = None):
+        if not await check_bot_admin(ctx):
+            return
+
+        if not is_queue_enabled(ctx):
+            return
+
+        if minutes is None:
+            embed = discord.Embed(title="", 
+                                description=f"Incorrect usage. Use the command as:\n`!setafktime <minutes>` where `<minutes>` is the minutes before a player is removed from the queue after not typing.", 
+                                color=discord.Color.red())
+            await ctx.send(embed=embed)
+            return
+
         """Set the AFK time for the current channel"""
         save_afk_time(ctx.guild.id, ctx.channel.id, minutes)
         embed = discord.Embed(description=f"AFK time has been set to {minutes} minutes for {ctx.channel.name}.", color=0x00ff00)
         await ctx.send(embed=embed)
+
 
     @commands.command()
     async def setpugchannel(self, ctx):
@@ -330,8 +343,14 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def createqueue(self, ctx, queuename: str = None, queuesize: int = None):
-
         if not await check_bot_admin(ctx):
+            return
+        
+        if not is_queue_enabled(ctx):
+            embed = discord.Embed(title="", 
+                                description=f"The queues are currently disabled. Use `!enablequeue` to enable", 
+                                color=discord.Color.red())
+            await ctx.send(embed=embed)
             return
 
         current_channels = get_current_pug_channels()
@@ -389,9 +408,17 @@ class PugQueueCog(commands.Cog):
         if not await check_bot_admin(ctx):
             return
         
+        
         # Check if the command is being executed in a pug channel
         current_channels = get_current_pug_channels()
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+
+        if not is_queue_enabled(ctx):
+            embed = discord.Embed(title="", 
+                                description=f"The queues are currently disabled. Use `!enablequeue` to enable", 
+                                color=discord.Color.red())
+            await ctx.send(embed=embed)
             return
 
         # Load current queues
@@ -432,6 +459,9 @@ class PugQueueCog(commands.Cog):
         if str(ctx.guild.id) not in current_channels:
             await ctx.send("This server doesn't have any pug channels set.")
             return
+        
+        if not is_queue_enabled(ctx):
+            return
 
         # Fetch the pug channel(s) for this server
         pug_channel_id = current_channels[str(ctx.guild.id)]
@@ -461,6 +491,9 @@ class PugQueueCog(commands.Cog):
         current_channels = get_current_pug_channels()
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
             return
+        
+        if not is_queue_enabled(ctx):
+            return
 
         user_id = get_user_id_from_input(ctx, user_input)
         if user_id is None:
@@ -481,6 +514,9 @@ class PugQueueCog(commands.Cog):
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
             return
 
+        if not is_queue_enabled(ctx):
+            return
+
         user_id = get_user_id_from_input(ctx, user_input)
         if user_id is None:
             await ctx.send(f"User `{user_input}` not found!")
@@ -496,6 +532,9 @@ class PugQueueCog(commands.Cog):
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
             return
         
+        if not is_queue_enabled(ctx):
+            return
+
         player_id = ctx.author.id
 
         # Load ongoing games
@@ -543,6 +582,9 @@ class PugQueueCog(commands.Cog):
         # Check if the command is being executed in a pug channel
         current_channels = get_current_pug_channels()
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+
+        if not is_queue_enabled(ctx):
             return
 
         substitute_id = ctx.author.id
@@ -618,6 +660,9 @@ class PugQueueCog(commands.Cog):
         if str(ctx.channel.id) not in current_channels.values():
             return
 
+        if not is_queue_enabled(ctx):
+            return
+
         completed_games = load_from_bson(os.path.join(DATA_DIR, 'completed_games.bson'))
         games_per_queue, last_game_timestamps, top_players = game_stats_for_channel(completed_games, ctx.channel.id)
 
@@ -631,6 +676,87 @@ class PugQueueCog(commands.Cog):
 
         await ctx.send(embed=embed)
 
+    @commands.command()
+    async def enablequeue(self, ctx):
+        """Enable the queue for the current server and channel."""
+        if not await check_bot_admin(ctx):
+            return
+        queue_status = load_from_bson(os.path.join(CACHE_DIR, 'queue_status.bson'))
+        guild_id = str(ctx.guild.id)
+        channel_id = str(ctx.channel.id)
+
+        if guild_id not in queue_status:
+            queue_status[guild_id] = {}
+        queue_status[guild_id][channel_id] = "enabled"
+        
+        save_to_bson(queue_status, os.path.join(CACHE_DIR, 'queue_status.bson'))
+        
+        embed = discord.Embed(description="Queue has been enabled for this channel.", color=0x00ff00)
+        await ctx.send(embed=embed)
+
+    @commands.command()
+    async def disablequeue(self, ctx):
+        """Disable the queue for the current server and channel."""
+        if not await check_bot_admin(ctx):
+            return
+        queue_status = load_from_bson(os.path.join(CACHE_DIR, 'queue_status.bson'))
+        guild_id = str(ctx.guild.id)
+        channel_id = str(ctx.channel.id)
+
+        if guild_id not in queue_status:
+            queue_status[guild_id] = {}
+        queue_status[guild_id][channel_id] = "disabled"
+        
+        save_to_bson(queue_status, os.path.join(CACHE_DIR, 'queue_status.bson'))
+        
+        embed = discord.Embed(description="Queue has been disabled for this channel.", color=0xff0000)
+        await ctx.send(embed=embed)
+
+    @commands.command()
+    async def banuser(self, ctx, user_input):
+        if not await check_bot_admin(ctx):
+            return
+
+        user_id = get_user_id_from_input(ctx, user_input)
+        if user_id is None:
+            await ctx.send(f"User `{user_input}` not found!")
+            return
+
+        # Ban the user
+        ban_user(ctx.guild.id, ctx.channel.id, user_id)
+        
+        # Remove user from all queues in the current channel
+        current_queues = get_current_queues()
+        for queue_name in current_queues[str(ctx.guild.id)][str(ctx.channel.id)]:
+            remove_player_from_queue(ctx.guild.id, ctx.channel.id, queue_name, user_id)
+        
+        await ctx.send(f"User `{user_input}` has been banned from joining queues in this channel.")
+
+
+    @commands.command()
+    async def unbanuser(self, ctx, user_input):
+        if not await check_bot_admin(ctx):
+            return
+
+        user_id = get_user_id_from_input(ctx, user_input)
+        if user_id is None:
+            await ctx.send(f"User `{user_input}` not found!")
+            return
+
+        # Unban the user
+        unban_user(ctx.guild.id, ctx.channel.id, user_id)
+        
+        await ctx.send(f"User `{user_input}` has been unbanned from joining queues in this channel.")
+
+
+def is_queue_enabled(ctx):
+    """Check if the queue is enabled for the given server and channel."""
+    queue_status = load_from_bson(os.path.join(CACHE_DIR, 'queue_status.bson'))
+    guild_id = str(ctx.guild.id)
+    channel_id = str(ctx.channel.id)
+
+    # If no specific status is stored for this server and channel, consider the queue as enabled by default.
+    return queue_status.get(guild_id, {}).get(channel_id, "enabled") == "enabled"
 
 
 async def forcefully_end_all_games(ctx, ongoing_games):
@@ -838,6 +964,10 @@ async def start_game(bot, guild_id, channel_id, queue_name, members):
 
 def add_player_to_queue(guild_id, channel_id, queue_name, player_id, bot):
     global QUEUE_LOG
+
+    # Check if the user is banned
+    if is_user_banned(guild_id, channel_id, player_id):
+        return "You are banned from joining queues in this channel."
     # Load the current queues
     current_queues = get_current_queues()
 
@@ -939,14 +1069,25 @@ def generate_queue_embed(guild_id, channel_id, bot):
     # Sort the queues based on their size, largest first
     sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
 
-    embed = discord.Embed(title="Game Queues", description=f"", colour=Colour.green())
+    embed = discord.Embed(description=f"", colour=Colour.green())
+
+    first_queue = True  # Use this to determine if we're processing the first queue
 
     for queue_name, queue_info in sorted_queues:
         players_count = len(queue_info.get("members", []))
         player_names = [player_name_mapping.get(int(player_entry[0]), bot.get_guild(guild_id).get_member(int(player_entry[0])).display_name) if int(player_entry[0]) in player_name_mapping else None for player_entry in queue_info.get("members", [])]
-        player_names = [f"`{name}`" for name in player_names if name is not None]  # Wrap in backticks and remove any None values
+        player_names = [f"`{name}`" for name in player_names if name is not None]  # Wrap each name in backticks
         player_names_str = " ".join(player_names)
-        embed.add_field(name=f"{queue_name} ({players_count}/{queue_info['size']})", value=player_names_str, inline=False)
+
+        # Use bold for queue name and [ ] for count, put player names on the next line
+        queue_string = f"**{queue_name}** [{players_count}/{queue_info['size']}]\n{player_names_str}"
+        
+        # For the first queue, set the name as "QUEUES"
+        if first_queue:
+            embed.add_field(name="QUEUES", value=queue_string, inline=False)
+            first_queue = False
+        else:
+            embed.add_field(name="\u200b", value=queue_string, inline=False)
 
     relevant_ongoing_games = {k: v for k, v in ongoing_games.items() if k.split('-')[1] == str(channel_id)}
     for _, game in relevant_ongoing_games.items():
@@ -955,7 +1096,7 @@ def generate_queue_embed(guild_id, channel_id, bot):
         for player in game['members']:
             name = player['name']
             if player['id'] in game['captains']:
-                captain_names.append(f"**(C) `{name}`**")
+                captain_names.append(f"**(C) {name}**")
             else:
                 player_names.append(f"`{name}`")
 
@@ -966,10 +1107,10 @@ def generate_queue_embed(guild_id, channel_id, bot):
         now = time.time()
         minutes_ago = int((now - game["timestamp"]) // 60)
 
-        embed.add_field(name=f"Ongoing: {game['queue_name']} ({minutes_ago} minutes ago)", value=combined_names_str, inline=False)
+        ongoing_game_string = f"Ongoing: **{game['queue_name']}** ({minutes_ago} minutes ago)\n{combined_names_str}"
+        embed.add_field(name="\u200b", value=ongoing_game_string, inline=False)
 
     return embed
-
 
 
 def is_player_in_ongoing_game(player_id):
@@ -1032,6 +1173,47 @@ def load_from_bson(filepath):
         return {}
     with open(filepath, 'rb') as f:
         return bson.BSON(f.read()).decode()
+    
+def load_bans():
+    return load_from_bson(BANS_FILE)
+
+def save_bans(data):
+    save_to_bson(data, BANS_FILE)
+
+def ban_user(guild_id, channel_id, user_id):
+    bans = load_bans()
+    guild_id_str = str(guild_id)
+    channel_id_str = str(channel_id)
+    
+    if guild_id_str not in bans:
+        bans[guild_id_str] = {}
+    if channel_id_str not in bans[guild_id_str]:
+        bans[guild_id_str][channel_id_str] = []
+    
+    # Add the user to the ban list if not already banned
+    if user_id not in bans[guild_id_str][channel_id_str]:
+        bans[guild_id_str][channel_id_str].append(user_id)
+    
+    save_bans(bans)
+
+def unban_user(guild_id, channel_id, user_id):
+    bans = load_bans()
+    guild_id_str = str(guild_id)
+    channel_id_str = str(channel_id)
+    
+    # Remove the user from the ban list if they are banned
+    if guild_id_str in bans and channel_id_str in bans[guild_id_str] and user_id in bans[guild_id_str][channel_id_str]:
+        bans[guild_id_str][channel_id_str].remove(user_id)
+    
+    save_bans(bans)
+
+def is_user_banned(guild_id, channel_id, user_id):
+    bans = load_bans()
+    guild_id_str = str(guild_id)
+    channel_id_str = str(channel_id)
+    
+    return guild_id_str in bans and channel_id_str in bans[guild_id_str] and user_id in bans[guild_id_str][channel_id_str]
+
 
 async def send_game_start_dm(bot, player, queue_name, captains, players):
     user = bot.get_user(player["id"])

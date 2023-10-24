@@ -26,6 +26,27 @@ class StatsCog(commands.Cog):
     @commands.command(name='serverhistory')
     async def server_history(self, ctx, *args):
         try:
+
+            # Check if the user requested help
+            if "help" in args:
+                embed = discord.Embed(
+                    title="Server History Help",
+                    description=(
+                        "Use the command as:\n"
+                        "`!serverhistory <options>`\n\n"
+                        "Available options:\n"
+                        "- `<server_filter>`: *Optional.* Keyword to filter servers by name.\n"
+                        "- `<number>`: *Optional.* Number of games to show (e.g. `5`).\n"
+                        "- `-adv`: *Optional.* Show advanced game details.\n\n"
+                        "Example:\n"
+                        "`!serverhistory pug 2 -adv`\n\n"
+                    ),
+                    color=discord.Color.blue()
+                )
+                await ctx.send(embed=embed)
+                return
+            
+
             server_filter = None
             num_games = 5  # Default number of games to show
             advanced = False  # Default is compact version
@@ -56,6 +77,12 @@ class StatsCog(commands.Cog):
             games_to_show = games[-num_games:][::-1]
 
             for game in games_to_show:
+                # Create separate player lists for DS and BE
+                ds_players = [player.get("name", "Unknown Player") for player in game.get("players", []) if player.get("team") == "Diamond Sword"]
+                be_players = [player.get("name", "Unknown Player") for player in game.get("players", []) if player.get("team") == "Blood Eagle"]
+
+                ds_players_str = ", ".join(ds_players)
+                be_players_str = ", ".join(be_players)
                 # Access values safely using get with default values
                 server_name = game.get("name", "Unknown Server")
                 completion_timestamp = datetime.fromtimestamp(game.get("completionTimestamp", 0))
@@ -85,10 +112,11 @@ class StatsCog(commands.Cog):
                     embed.add_field(name="Server Name", value=server_name, inline=True)
                     embed.add_field(name="Completion Time", value=f"{completion_timestamp.strftime('%Y-%m-%d %H:%M:%S')} ({time_elapsed})", inline=True)
                     embed.add_field(name="Duration", value=f"{game_duration:.1f} minutes", inline=True)
-                    embed.add_field(name="Players", value=player_names, inline=False)
                     embed.add_field(name="Scores", value=scores, inline=True)
                     embed.add_field(name="Map & Mode", value=f"{map_name} ({game['map']['gamemode']})", inline=True)
                     embed.add_field(name="Time Remaining", value=f"{game['timeRemaining'] / 60:.1f} minutes", inline=True)
+                    embed.add_field(name="DS Players", value=ds_players_str, inline=True)
+                    embed.add_field(name="BE Players", value=be_players_str, inline=True)
                 else:
                     embed.title = ""
                     embed.add_field(name="Server Name", value=server_name, inline=True)
