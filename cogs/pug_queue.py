@@ -3,6 +3,7 @@ import asyncio
 import bson
 import os
 import random
+import shlex
 import time
 from collections import defaultdict, Counter
 from datetime import datetime
@@ -61,7 +62,6 @@ for directory in [CACHE_DIR, DATA_DIR]:
 # TODO Add maps
 # TODO Fix send balanced teams embed
 # TODO Slash Commands
-# TODO Add info to !pugsettings
 
 class QueueButton(discord.ui.Button):
     def __init__(self, label, queue_view, style=discord.ButtonStyle.primary):
@@ -278,6 +278,89 @@ class PugQueueCog(commands.Cog):
         save_afk_time(ctx.guild.id, ctx.channel.id, minutes)
         embed = discord.Embed(description=f"AFK time has been set to {minutes} minutes for {ctx.channel.name}.", color=0x00ff00)
         await ctx.send(embed=embed)
+
+
+    @commands.command()
+    async def editmap(self, ctx, action=None, *, args=None):
+        if not await check_bot_admin(ctx):
+            return
+
+         # Parsing the arguments for map_name, weight, and map_type
+        if args:
+            split_args = shlex.split(args)
+            map_name = split_args[0]
+            weight = split_args[1] if len(split_args) > 1 else None
+            map_type = split_args[2] if len(split_args) > 2 else None
+        else:
+            map_name = weight = map_type = None
+
+        # If no action is provided, show the help embed
+        if not action:
+            # Loading the current map weights
+            map_weights = load_from_bson(os.path.join(DATA_DIR, 'map_weights.bson'))
+            arena_map_weights = load_from_bson(os.path.join(DATA_DIR, 'arena_map_weights.bson'))
+
+            map_weights_str = "\n".join([f"• {k}: {v}" for k, v in map_weights.items()])
+            arena_map_weights_str = "\n".join([f"• {k}: {v}" for k, v in arena_map_weights.items()])
+
+
+            embed = discord.Embed(
+                title="Edit Map Help",
+                description=(
+                    "Use the command as:\n"
+                    "`!editmap <action> \"<map_name>\" <weight> [map_type]`\n\n"
+                    "Available actions:\n"
+                    "- `add`: Add a new map with the specified weight.\n"
+                    "- `remove`: Remove an existing map.\n"
+                    "- `modify`: Modify the weight of an existing map.\n\n"
+                    "Map names:\n"
+                    "- For single-word map names, just type the name (e.g., `MyMap`).\n"
+                    "- For multi-word map names, wrap them in quotes (e.g., `\"Dangerous Crossing\"`).\n\n"
+                    "Map types (optional):\n"
+                    "- If not provided, default map weights are used.\n"
+                    "- `arena`: Use arena map weights.\n\n"
+                    "Current map weights:\n"
+                    f"{map_weights_str}\n\n"
+                    "Current arena map weights:\n"
+                    f"{arena_map_weights_str}\n\n"
+                    "Examples:\n"
+                    "`!editmap add Raindance 25`\n"
+                    "`!editmap add \"Dangerous Crossing\" 24`\n"
+                    "`!editmap modify \"Walled In\" 23 arena`\n"
+                    "`!editmap remove Katabatic`\n"
+                ),
+                color=discord.Color.blue()
+            )
+
+            await ctx.send(embed=embed)
+            return
+
+        # Decide which BSON file to use based on map_type
+        if map_type == "arena":
+            filepath = os.path.join(DATA_DIR, 'arena_map_weights.bson')
+        else:
+            filepath = os.path.join(DATA_DIR, 'map_weights.bson')
+
+        map_data = load_from_bson(filepath)
+
+        try:
+            if action not in ["add", "remove", "modify"]:
+                await ctx.send("Invalid action. Use 'add', 'remove', or 'modify'.")
+                return
+
+            if action == "add":
+                map_data[map_name] = float(weight)
+            elif action == "remove" and map_name in map_data:
+                del map_data[map_name]
+            elif action == "modify" and map_name in map_data:
+                map_data[map_name] = float(weight)
+
+            save_to_bson(map_data, filepath)
+            await ctx.send(f"Map `{map_name}` {action}ed successfully!")
+
+        except Exception as e:
+            await ctx.send(f"Error: {e}")
+
 
 
     @commands.command()
