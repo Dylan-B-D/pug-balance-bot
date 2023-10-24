@@ -1,4 +1,5 @@
 import os
+import bson
 import requests
 import json
 from datetime import datetime
@@ -70,3 +71,15 @@ def fetch_data(start_date, end_date, queue):
         print(f"Fetched and cached {len(combined_data)} games for {queue} queue.")
     
     return combined_data
+
+def save_to_bson(data, filepath):
+    """Save the data to a BSON file."""
+    with open(filepath, 'wb') as f:
+        f.write(bson.BSON.encode(data))
+
+def load_from_bson(filepath):
+    """Load data from a BSON file. If the file doesn't exist, return an empty dictionary."""
+    if not os.path.exists(filepath):
+        return {}
+    with open(filepath, 'rb') as f:
+        return bson.BSON(f.read()).decode()

@@ -1,5 +1,6 @@
 # Standard Libraries
 import re
+import os
 import configparser
 
 # Third-party Libraries
@@ -11,7 +12,6 @@ import random
 from data.player_mappings import player_name_mapping
 from data.map_url_mapping import map_url_mapping
 from data.user_roles import bot_admins
-from data.map_weights import map_weights
 from data.map_commands import map_commands, map_commands_arena
 from data.shared_data import (last_messages, most_recent_matched_ids, matched_results_store, substitution_store, game_history_cache)
 
@@ -20,13 +20,22 @@ from modules.data_managment import fetch_data
 from modules.rating_calculations import (calculate_ratings, compute_avg_picks, initialize_player_data, process_matches)
 from modules.team_logic import balance_teams
 from modules.embeds_formatting import create_embed
+from modules.data_managment import load_from_bson
 
 # ==============================
 # CONFIGURATION
 # ==============================
 
+# File Paths
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  
+CACHE_DIR = os.path.join(BASE_DIR, 'cache', 'gamequeue')
+DATA_DIR = os.path.join(BASE_DIR, 'data', 'gamequeue')
+
 # Command mapping
 reverse_map_commands = {v: k for k, v in map_commands.items()}
+
+# Load map_weights from BSON file
+map_weights = load_from_bson(os.path.join(DATA_DIR, 'map_weights.bson'))
 
 # Random map selection based on weights
 maps, weights = zip(*map_weights.items())

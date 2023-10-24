@@ -4,15 +4,21 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
-def create_map_weights_chart(map_weights):
-    map_names = list(map_weights.keys())
-    weights = list(map_weights.values())
+def create_map_weights_chart(map_weights, arena_map_weights):
+    # Sort the maps based on weights
+    sorted_map_weights = dict(sorted(map_weights.items(), key=lambda item: item[1], reverse=True))
+    sorted_arena_map_weights = dict(sorted(arena_map_weights.items(), key=lambda item: item[1], reverse=True))
+
+    map_names = list(sorted_map_weights.keys()) + [""] + list(sorted_arena_map_weights.keys())
+    weights = list(sorted_map_weights.values()) + [0] + list(sorted_arena_map_weights.values())
     
-    plt.figure(figsize=(10,6))
+    plt.figure(figsize=(10,8))
     
     plt.gca().set_facecolor('none')
     
-    plt.barh(map_names, weights, color='skyblue')
+    colors = ['skyblue'] * len(sorted_map_weights) + ['none'] + ['salmon'] * len(sorted_arena_map_weights)
+    
+    plt.barh(map_names, weights, color=colors)
     
     # Setting the color of the labels and title to white
     plt.xlabel('Weights', color='white')
@@ -32,6 +38,7 @@ def create_map_weights_chart(map_weights):
     plt.savefig(filename, facecolor='none')
     plt.close()
     return filename
+
 
 def create_rolling_percentage_chart(player_id, data, queue_type):
     SMOOTHING_WINDOW = 40  

@@ -1,11 +1,12 @@
 import discord
+import os
 import configparser
 from discord.ext import commands
 from discord import Embed
 from modules.charts import create_map_weights_chart
-from data.map_weights import map_weights
 from data.user_roles import bot_admins
 from data.player_mappings import player_name_mapping
+from modules.data_managment import load_from_bson
 
 # Initialize the configparser and read the config.ini
 config = configparser.ConfigParser()
@@ -15,6 +16,8 @@ config.read('config.ini')
 MIN_REACTIONS = int(config['Constants']['MIN_REACTIONS'])
 MIN_REACTIONS_MAP = int(config['Constants']['MIN_REACTIONS_MAP'])
 
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  
+DATA_DIR = os.path.join(BASE_DIR, 'data', 'gamequeue')
 
 class UtilitiesCog(commands.Cog):
     def __init__(self, bot):
@@ -63,7 +66,11 @@ class UtilitiesCog(commands.Cog):
 
     @commands.command(name='info')
     async def info(self, ctx):
-        filename = create_map_weights_chart(map_weights)
+        # Load both map weights from their BSON files
+        map_weights = load_from_bson(os.path.join(DATA_DIR, 'map_weights.bson'))
+        arena_map_weights = load_from_bson(os.path.join(DATA_DIR, 'arena_map_weights.bson'))
+
+        filename = create_map_weights_chart(map_weights, arena_map_weights)
 
         # Create a discord.File object
         file = discord.File(filename, filename="map_weights_chart.png")

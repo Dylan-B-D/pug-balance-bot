@@ -300,8 +300,13 @@ class PugQueueCog(commands.Cog):
             map_weights = load_from_bson(os.path.join(DATA_DIR, 'map_weights.bson'))
             arena_map_weights = load_from_bson(os.path.join(DATA_DIR, 'arena_map_weights.bson'))
 
-            map_weights_str = "\n".join([f"• {k}: {v}" for k, v in map_weights.items()])
-            arena_map_weights_str = "\n".join([f"• {k}: {v}" for k, v in arena_map_weights.items()])
+            # Sorting the map weights in descending order
+            sorted_map_weights = dict(sorted(map_weights.items(), key=lambda item: item[1], reverse=True))
+            sorted_arena_map_weights = dict(sorted(arena_map_weights.items(), key=lambda item: item[1], reverse=True))
+
+            map_weights_str = "\n".join([f"• {k}: {v}" for k, v in sorted_map_weights.items()])
+            arena_map_weights_str = "\n".join([f"• {k}: {v}" for k, v in sorted_arena_map_weights.items()])
+
 
 
             embed = discord.Embed(
@@ -314,10 +319,9 @@ class PugQueueCog(commands.Cog):
                     "- `remove`: Remove an existing map.\n"
                     "- `modify`: Modify the weight of an existing map.\n\n"
                     "Map names:\n"
-                    "- For single-word map names, just type the name (e.g., `MyMap`).\n"
+                    "- For single-word map names, just type the name (e.g., `Drydock`).\n"
                     "- For multi-word map names, wrap them in quotes (e.g., `\"Dangerous Crossing\"`).\n\n"
                     "Map types (optional):\n"
-                    "- If not provided, default map weights are used.\n"
                     "- `arena`: Use arena map weights.\n\n"
                     "Current map weights:\n"
                     f"{map_weights_str}\n\n"
