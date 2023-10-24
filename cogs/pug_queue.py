@@ -25,7 +25,6 @@ CACHE_DIR = os.path.join(BASE_DIR, 'cache', 'gamequeue')
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'gamequeue')
 
 AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.bson')
-QUEUE_STATUS_FILE = os.path.join(DATA_DIR, 'queue_status.bson')
 BANS_FILE = os.path.join(DATA_DIR, 'bans.bson')
 
 AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit
@@ -62,7 +61,6 @@ for directory in [CACHE_DIR, DATA_DIR]:
 # TODO Add maps
 # TODO Fix send balanced teams embed
 # TODO Slash Commands
-# TODO Serverhistory should show players per team 
 # TODO Add info to !pugsettings
 
 class QueueButton(discord.ui.Button):
@@ -459,9 +457,6 @@ class PugQueueCog(commands.Cog):
         if str(ctx.guild.id) not in current_channels:
             await ctx.send("This server doesn't have any pug channels set.")
             return
-        
-        if not is_queue_enabled(ctx):
-            return
 
         # Fetch the pug channel(s) for this server
         pug_channel_id = current_channels[str(ctx.guild.id)]
@@ -469,7 +464,7 @@ class PugQueueCog(commands.Cog):
         
         embed = discord.Embed(title="Pug Settings", description=f"Pug Channel(s) in {ctx.guild.name}", color=0x00ff00)
         
-        # If there's a valid pug channel, add it to the embed
+        # If there's a valid pug channel, add its details to the embed
         if pug_channel:
             embed.add_field(name="Pug Channel", value=pug_channel.name, inline=False)
 
@@ -477,10 +472,29 @@ class PugQueueCog(commands.Cog):
             channel_queues = current_queues.get(str(ctx.guild.id), {}).get(pug_channel_id, {})
             for queue_name, queue_info in channel_queues.items():
                 embed.add_field(name=f"Queue: {queue_name}", value=f"Size: {queue_info['size']}", inline=False)
+            
+            # Add AFK time for the server channel
+            afk_time = get_afk_time(ctx.guild.id, ctx.channel.id)
+            embed.add_field(name="AFK Time", value=f"{afk_time} minutes", inline=False)
+            
+            # Add bans in server channel
+            bans = load_bans()
+            banned_users = bans.get(str(ctx.guild.id), {}).get(pug_channel_id, [])
+            banned_usernames = [self.bot.get_user(int(uid)).display_name for uid in banned_users if self.bot.get_user(int(uid))]
+            if banned_usernames:
+                embed.add_field(name="Banned Users", value=", ".join(banned_usernames), inline=False)
+            else:
+                embed.add_field(name="Banned Users", value="No users banned", inline=False)
+            
+            # Add enabled / disabled status in server channel
+            queue_status = "Enabled" if is_queue_enabled(ctx) else "Disabled"
+            embed.add_field(name="Queue Status", value=queue_status, inline=False)
+            
         else:
             embed.add_field(name="Error", value="Couldn't fetch the pug channel details.", inline=False)
 
         await ctx.send(embed=embed)
+
 
     @commands.command()
     async def adduser(self, ctx, user_input, queue_name):
@@ -681,7 +695,7 @@ class PugQueueCog(commands.Cog):
         """Enable the queue for the current server and channel."""
         if not await check_bot_admin(ctx):
             return
-        queue_status = load_from_bson(os.path.join(CACHE_DIR, 'queue_status.bson'))
+        queue_status = load_from_bson(os.path.join(DATA_DIR, 'queue_status.bson'))
         guild_id = str(ctx.guild.id)
         channel_id = str(ctx.channel.id)
 
@@ -689,7 +703,7 @@ class PugQueueCog(commands.Cog):
             queue_status[guild_id] = {}
         queue_status[guild_id][channel_id] = "enabled"
         
-        save_to_bson(queue_status, os.path.join(CACHE_DIR, 'queue_status.bson'))
+        save_to_bson(queue_status, os.path.join(DATA_DIR, 'queue_status.bson'))
         
         embed = discord.Embed(description="Queue has been enabled for this channel.", color=0x00ff00)
         await ctx.send(embed=embed)
@@ -699,7 +713,7 @@ class PugQueueCog(commands.Cog):
         """Disable the queue for the current server and channel."""
         if not await check_bot_admin(ctx):
             return
-        queue_status = load_from_bson(os.path.join(CACHE_DIR, 'queue_status.bson'))
+        queue_status = load_from_bson(os.path.join(DATA_DIR, 'queue_status.bson'))
         guild_id = str(ctx.guild.id)
         channel_id = str(ctx.channel.id)
 
@@ -707,7 +721,7 @@ class PugQueueCog(commands.Cog):
             queue_status[guild_id] = {}
         queue_status[guild_id][channel_id] = "disabled"
         
-        save_to_bson(queue_status, os.path.join(CACHE_DIR, 'queue_status.bson'))
+        save_to_bson(queue_status, os.path.join(DATA_DIR, 'queue_status.bson'))
         
         embed = discord.Embed(description="Queue has been disabled for this channel.", color=0xff0000)
         await ctx.send(embed=embed)
@@ -751,7 +765,7 @@ class PugQueueCog(commands.Cog):
 
 def is_queue_enabled(ctx):
     """Check if the queue is enabled for the given server and channel."""
-    queue_status = load_from_bson(os.path.join(CACHE_DIR, 'queue_status.bson'))
+    queue_status = load_from_bson(os.path.join(DATA_DIR, 'queue_status.bson'))
     guild_id = str(ctx.guild.id)
     channel_id = str(ctx.channel.id)
 
