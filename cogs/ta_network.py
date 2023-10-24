@@ -5,6 +5,7 @@ import os
 import time
 import discord
 import traceback
+from collections import defaultdict
 from discord.ext import commands, tasks
 from filelock import FileLock
 from discord import Embed
@@ -194,21 +195,25 @@ class TANetworkCog(commands.Cog):
 
             # Check for Arena game completion
             if gamemode == "Arena":
-                if timeRemaining == 0:
-                    if server["id"] not in self.finished_arena_games:
-                        self.save_game_to_history(server)
-                        self.finished_arena_games.add(server["id"])
-                        continue
-                else:
-                    # If the time resets, assume a new game has started
-                    if old_timeRemaining == 0 and timeRemaining > old_timeRemaining:
-                        self.finished_arena_games.remove(server["id"])
-                    # If the score increases, save the game to history
-                    elif (bloodEagle_score > old_bloodEagle_score) or (diamondSword_score > old_diamondSword_score):
-                        self.save_game_to_history(server)
-                        continue
-            # Existing CTF logic
-            elif gamemode == "CTF" and timeRemaining == 0:
+                # If there's a significant time jump, consider it an end condition
+                time_jump = old_timeRemaining and timeRemaining > old_timeRemaining and (old_timeRemaining - timeRemaining) > 90
+
+                # If the game has ended (either by time running out, one team's score reaching 0, or a significant time jump)
+                game_ended = timeRemaining == 0 or bloodEagle_score == 0 or diamondSword_score == 0 or time_jump
+
+                # If the game has ended and it's not already marked as finished, save it
+                if game_ended and server["id"] not in self.finished_arena_games:
+                    self.save_game_to_history(server)
+                    self.finished_arena_games.add(server["id"])
+                    continue
+
+                # If there's a score increase from the last saved state, indicating a new game, remove the server ID from finished_arena_games
+                if (bloodEagle_score > old_bloodEagle_score or diamondSword_score > old_diamondSword_score):
+                    self.finished_arena_games.discard(server["id"])  # Use discard to avoid KeyError
+
+
+            # CTF logic
+            if gamemode == "CTF" and timeRemaining == 0:
                 if old_timeRemaining and old_timeRemaining == 0 and timeRemaining > old_timeRemaining and timeRemaining < 600:
                     self.save_game_to_history(server)
                     continue
@@ -228,9 +233,6 @@ class TANetworkCog(commands.Cog):
                     continue
                 elif not old_timeRemaining or old_timeRemaining != 0:
                     continue
-            elif gamemode == "Arena" and timeRemaining == 0:
-                self.save_game_to_history(server)
-                continue
 
             # Logic to update finished and active games lists
             if server["id"] in self.finished_games and (bloodEagle_score < old_bloodEagle_score or diamondSword_score < old_diamondSword_score):
@@ -248,17 +250,14 @@ class TANetworkCog(commands.Cog):
         if server is None:
             print("Warning: server is None in save_game_to_history!")
             return
-        completed_games_file = os.path.join(DATA_DIR, "completed_games.json")
-        
-        # Load previous completed games
-        if os.path.exists(completed_games_file):
-            with open(completed_games_file, 'r') as f:
-                completed_games = json.load(f)
-        else:
-            completed_games = []
 
-        # Correct the timeRemaining value using the cache history
+        completed_games_file = os.path.join(DATA_DIR, "completed_games.json")
+
+        # Correct the timeRemaining value and player list using the cache history
         if server["id"] in self.cache_history:
+            # Prioritize the most recent cache with more players
+            prior_cache_with_more_players = None
+
             for past_server in reversed(self.cache_history[server["id"]]):
                 if past_server["timeRemaining"] > 60:  # More than 1 minute
                     server["timeRemaining"] = past_server["timeRemaining"]
@@ -267,12 +266,45 @@ class TANetworkCog(commands.Cog):
                     server["timeRemaining"] = 0
                     break
 
+                # Check if the past server has more players
+                if len(past_server.get("players", [])) > len(server.get("players", [])):
+                    prior_cache_with_more_players = past_server
+
+            # If we found a past server with more players, update the current server's player data
+            if prior_cache_with_more_players:
+                server["players"] = prior_cache_with_more_players["players"]
+
+        # Cleaning conditions (from remove_duplicate_games)
+        server_name = server.get('name', 'Unknown Server').lower()  # Convert to lowercase for case-insensitive checks
+        gamemode = server.get("map", {}).get("gamemode")
+        timeRemaining = server.get("timeRemaining", 0)
+        scores = server.get("scores", {})
+        BE_score = scores.get("bloodEagle", 0)
+        DS_score = scores.get("diamondSword", 0)
+
+        if len(server.get('players', [])) < 2:
+            print(f"Game from {server_name} not saved: Less than 2 players.")
+            return
+        if timeRemaining > 1080 and "cap" not in server_name:
+            print(f"Game from {server_name} not saved: Time remaining over 18 mins without 'cap'.")
+            return
+        if gamemode == "CTF" and (BE_score > 10 or DS_score > 10) and "cap" not in server_name:
+            print(f"Game from {server_name} not saved: CTF game score exceeds 10 without 'cap'.")
+            return
+
+        # Load previous completed games
+        if os.path.exists(completed_games_file):
+            with open(completed_games_file, 'r') as f:
+                completed_games = json.load(f)
+        else:
+            completed_games = []
+
         # Clean up the server data before saving
         if "specificServerInfo" in server:
             # Retain the player info from specificServerInfo
             if "players" in server["specificServerInfo"]:
                 server["players"] = server["specificServerInfo"]["players"]
-            
+
             # Remove the specificServerInfo field
             del server["specificServerInfo"]
 
@@ -281,13 +313,11 @@ class TANetworkCog(commands.Cog):
 
         # Append the cleaned-up game to the list
         completed_games.append(server)
-        
+
         # Save the updated list
         with open(completed_games_file, 'w') as f:
             json.dump(completed_games, f)
 
-        # remove_duplicate_games()
-    
 
 
     @commands.command(name='servers')
@@ -419,28 +449,86 @@ class TANetworkCog(commands.Cog):
             await ctx.send(embed=error_embed)
     
 
+    @commands.command(name='cleancache')
+    async def clean_cache(self, ctx):
+        result = remove_duplicate_games()
+        embed = discord.Embed(title="Cache Cleaned", color=0x00ff00)
+
+        embed.add_field(name="Original Number of Games", value=result["original_count"], inline=True)
+        embed.add_field(name="Unique Games After Cleanup", value=result["unique_count"], inline=True)
+        embed.add_field(name="File Size Before", value=f"{result['file_size_before'] / 1024:.2f} KB", inline=True)
+        embed.add_field(name="File Size After", value=f"{result['file_size_after'] / 1024:.2f} KB", inline=True)
+
+        server_counts_str = '\n'.join([f"{server}: {count}" for server, count in result["server_counts"].items()])
+        embed.add_field(name="Server Counts", value=server_counts_str, inline=False)
+
+        cleaned_counts_str = '\n'.join([f"{server}: {count} cleaned" for server, count in result["cleaned_server_counts"].items() if count > 0])
+        embed.add_field(name="Cleaned Server Counts", value=cleaned_counts_str, inline=False)
+
+        await ctx.send(embed=embed)
+
+
+
 def remove_duplicate_games():
     completed_games_file = os.path.join(DATA_DIR, "completed_games.json")
-    
+
     # Step 1: Load the completed_games.json file into memory.
     with open(completed_games_file, 'r') as file:
         games = json.load(file)
 
     unique_games = {}
-    
-    # Step 2 and 3: Process each game and store in unique_games.
+    server_counts = defaultdict(int)
+    cleaned_server_counts = defaultdict(int)
+
+    # Step 2: Count all games before processing
     for game in games:
+        server_name = game.get('name', 'Unknown Server')
+        server_counts[server_name] += 1
+
+    # Step 3: Process each game and store in unique_games.
+    for game in games:
+        server_name = game.get('name', 'Unknown Server').lower()  # Convert to lowercase for case-insensitive checks
+        gamemode = game.get("map", {}).get("gamemode")
+        timeRemaining = game.get("timeRemaining", 0)
+        scores = game.get("scores", {})
+        BE_score = scores.get("bloodEagle", 0)
+        DS_score = scores.get("diamondSword", 0)
+
+        # Cleaning conditions
+        if len(game.get('players', [])) < 2:
+            cleaned_server_counts[game.get('name', 'Unknown Server')] += 1
+            continue
+        if timeRemaining > 1080 and "cap" not in server_name:
+            cleaned_server_counts[game.get('name', 'Unknown Server')] += 1
+            continue
+        if gamemode == "CTF" and (BE_score > 10 or DS_score > 10) and "cap" not in server_name:
+            cleaned_server_counts[game.get('name', 'Unknown Server')] += 1
+            continue
+
         # Create a unique key for the game excluding the completionTimestamp.
         key = json.dumps({k: v for k, v in game.items() if k != "completionTimestamp"})
+
         if key not in unique_games:
             unique_games[key] = game
 
-    # Step 5: Write the cleaned data back to completed_games.json.
+    # File size before
+    file_size_before = os.path.getsize(completed_games_file)
+
+    # Step 4: Write the cleaned data back to completed_games.json.
     with open(completed_games_file, 'w') as file:
         json.dump(list(unique_games.values()), file)
 
-    print(f"Original number of games: {len(games)}")
-    print(f"Number of games after removing duplicates: {len(unique_games)}")
+    # File size after
+    file_size_after = os.path.getsize(completed_games_file)
+
+    return {
+        "original_count": len(games),
+        "unique_count": len(unique_games),
+        "file_size_before": file_size_before,
+        "file_size_after": file_size_after,
+        "server_counts": server_counts,
+        "cleaned_server_counts": cleaned_server_counts
+    }
 
 
 

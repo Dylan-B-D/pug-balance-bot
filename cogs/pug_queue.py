@@ -58,7 +58,9 @@ for directory in [CACHE_DIR, DATA_DIR]:
 # TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
 # TODO Add subcaptaining
-# TODO Make sure that commands only work in correct channel
+# TODO Add banning
+# TODO Add maps
+# TODO Fix send balanced teams embed
 # TODO Enable Disable for whole queue
 # TODO Slash Commands
 
@@ -386,10 +388,9 @@ class PugQueueCog(commands.Cog):
 
         if not await check_bot_admin(ctx):
             return
-
-        current_channels = get_current_pug_channels()
-
+        
         # Check if the command is being executed in a pug channel
+        current_channels = get_current_pug_channels()
         if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
             return
 
@@ -455,6 +456,12 @@ class PugQueueCog(commands.Cog):
     async def adduser(self, ctx, user_input, queue_name):
         if not await check_bot_admin(ctx):
             return
+        
+        # Check if the command is being executed in a pug channel
+        current_channels = get_current_pug_channels()
+        if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+
         user_id = get_user_id_from_input(ctx, user_input)
         if user_id is None:
             await ctx.send(f"User `{user_input}` not found!")
@@ -468,6 +475,12 @@ class PugQueueCog(commands.Cog):
     async def removeuser(self, ctx, user_input, queue_name):
         if not await check_bot_admin(ctx):
             return
+        
+        # Check if the command is being executed in a pug channel
+        current_channels = get_current_pug_channels()
+        if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+
         user_id = get_user_id_from_input(ctx, user_input)
         if user_id is None:
             await ctx.send(f"User `{user_input}` not found!")
@@ -478,6 +491,11 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def end(self, ctx, flag: str = None):
+        # Check if the command is being executed in a pug channel
+        current_channels = get_current_pug_channels()
+        if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+        
         player_id = ctx.author.id
 
         # Load ongoing games
@@ -522,6 +540,11 @@ class PugQueueCog(commands.Cog):
 
     @commands.command()
     async def subuser(self, ctx, *, user_input: str):
+        # Check if the command is being executed in a pug channel
+        current_channels = get_current_pug_channels()
+        if str(ctx.guild.id) not in current_channels or str(ctx.channel.id) != current_channels[str(ctx.guild.id)]:
+            return
+
         substitute_id = ctx.author.id
 
         # Check if the substituting player is in an ongoing game
