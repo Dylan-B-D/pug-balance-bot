@@ -75,7 +75,7 @@ async def check_bot_admin(ctx):
     Returns True if the author is a bot admin, else sends an error embed and returns False.
     """
     if ctx.author.id not in bot_admins:
-        embed = discord.Embed(title="Permission Denied", description="Admin permissions required to execute this command.", color=0xff0000)
+        embed = discord.Embed(title="Permission Denied", description="Admin permissions required to execute this command.", color=discord.Color.red())
         await ctx.send(embed=embed)
         return False
     return True

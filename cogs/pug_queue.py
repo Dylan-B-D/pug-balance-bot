@@ -1,6 +1,5 @@
 # ---- STANDARD LIBRARY IMPORTS ---- #
 import asyncio
-import bson
 import os
 import random
 import shlex
@@ -21,31 +20,29 @@ from modules.utilities import (send_balanced_teams, check_bot_admin)
 from modules.rating_calculations import calculate_ratings
 
 # ---- CONSTANTS ---- #
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  
+
+# Directory constants
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 CACHE_DIR = os.path.join(BASE_DIR, 'cache', 'gamequeue')
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'gamequeue')
 
-AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.bson')
-BANS_FILE = os.path.join(DATA_DIR, 'bans.bson')
+# File constants for storing data
+AFK_TIMES_FILE = os.path.join(DATA_DIR, 'afk_times.bson')  # Server-set AFK time limit
+BANS_FILE = os.path.join(DATA_DIR, 'bans.bson')            # Server-specific banned users
+OFFLINE_CACHE_FILE = os.path.join(CACHE_DIR, 'offline_cache.bson')  # Time and ID of users that go offline after adding
+OFFLINE_TIME_FILE = os.path.join(DATA_DIR, 'offline_times.bson')    # Server-set offline time limit
 
-AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit
-CURRENT_SAVE_VERSION = "1.0" # Formatting version for saving games to BSON
+# Default time limits
+OFFLINE_LIMIT_MINUTES = 20  # Default offline time limit (in minutes)
+AFK_TIME_LIMIT_MINUTES = 90  # Default AFK time limit (in minutes)
 
+# Miscellaneous
+CURRENT_SAVE_VERSION = "1.0"  # Formatting version for saving games to BSON
+
+
+# Set the color for queues. 14 (PUG) set to primary
 QUEUE_SIZE_TO_COLOR = {
-    2: discord.ButtonStyle.secondary,
-    4: discord.ButtonStyle.secondary,
-    6: discord.ButtonStyle.secondary, 
-    8: discord.ButtonStyle.secondary,
-    10: discord.ButtonStyle.secondary,
-    12: discord.ButtonStyle.secondary,
     14: discord.ButtonStyle.primary,
-    16: discord.ButtonStyle.secondary,
-    18: discord.ButtonStyle.secondary,
-    20: discord.ButtonStyle.secondary,
-    22: discord.ButtonStyle.secondary,
-    24: discord.ButtonStyle.secondary,
-    26: discord.ButtonStyle.secondary,
-    28: discord.ButtonStyle.secondary,
 }
 
 # ---- LOG OF RECENT BOT INTERACTIONS ---- #
@@ -57,7 +54,6 @@ for directory in [CACHE_DIR, DATA_DIR]:
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-# TODO Add offline limit and kick
 # TODO Add min games to captain, add weighting for equal skill, add reduced weight if captained recently
 # TODO Fix send balanced teams embed, add arena
 # TODO Slash Commands
@@ -127,7 +123,63 @@ class PugQueueCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.check_stale_users.start()    
+        self.check_stale_users.start()
+        self.check_member_statuses.start()
+
+    @tasks.loop(minutes=1)
+    async def check_member_statuses(self):
+        current_queues = get_current_queues()
+        offline_cache = load_from_offline_cache()
+        offline_limits = load_offline_limits()
+        removals = {}  # Dictionary to track which users are removed for being offline too long
+
+        # Iterate over each member in the queue
+        for guild_id, channels in current_queues.items():
+            guild = self.bot.get_guild(int(guild_id))
+            if not guild:
+                continue
+            for channel_id, queues in channels.items():
+                for queue_name, queue_data in queues.items():
+                    for player_id, _ in queue_data["members"]:
+                        member = guild.get_member(player_id)
+                        key = f"{guild_id}-{channel_id}-{player_id}"
+                        
+                        # If member went offline, record the timestamp
+                        if member.status == discord.Status.offline and key not in offline_cache:
+                            offline_cache[key] = datetime.utcnow().timestamp()
+                        
+                        # If member is back online, remove the timestamp
+                        elif member.status in [discord.Status.online, discord.Status.idle, discord.Status.dnd] and key in offline_cache:
+                            del offline_cache[key]
+                        
+                        # Check if the user's offline duration exceeds the limit
+                        if key in offline_cache:
+                            offline_duration = datetime.utcnow().timestamp() - offline_cache[key]
+                            limit = offline_limits.get(str(guild_id), {}).get(str(channel_id), OFFLINE_LIMIT_MINUTES) * 60
+                            if offline_duration > limit:
+                                remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason="offline_too_long")
+                                removals.setdefault((player_id, channel_id), {}).setdefault('queues', []).append(queue_name)
+                                removals[(player_id, channel_id)]['offline_time'] = limit / 60  # Convert to minutes
+                                del offline_cache[key]
+
+        # Save the updated offline cache
+        save_to_offline_cache(offline_cache)
+
+        # Inform users and the channel about the removal
+        for (player_id, channel_id), removal_data in removals.items():
+            user = self.bot.get_user(int(player_id))
+            
+            # Send an embed PM to the user
+            queues_str = ', '.join(f"`{queue_name}`" for queue_name in removal_data['queues'])
+            embed_pm = discord.Embed(description=f"You were removed from {queues_str} due to being offline for more than {removal_data['offline_time']} minutes.", color=discord.Color.red())
+            await user.send(embed=embed_pm)
+            
+            channel = self.bot.get_channel(int(channel_id))
+
+            # Send an embed indicating the user was removed due to being offline
+            embed_msg = discord.Embed(description=f"{player_name_mapping.get(int(player_id), 'Unknown')} was removed from {queues_str} for being offline for more than {removal_data['offline_time']} minutes.", color=discord.Color.red())
+            await channel.send(embed=embed_msg)
+
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction):
@@ -179,13 +231,13 @@ class PugQueueCog(commands.Cog):
             
             # Send an embed PM to the user
             queues_str = ', '.join(f"`{queue_name}`" for queue_name in removal_data['queues'])
-            embed_pm = discord.Embed(description=f"You were removed from {queues_str} due to being AFK for more than {removal_data['afk_time']} minutes.", color=0xff0000)
+            embed_pm = discord.Embed(description=f"You were removed from {queues_str} due to being AFK for more than {removal_data['afk_time']} minutes.", color=discord.Color.red())
             await user.send(embed=embed_pm)
             
             channel = self.bot.get_channel(int(channel_id))
 
             # Send an embed indicating the user was removed due to being AFK
-            embed_msg = discord.Embed(description=f"{player_name_mapping.get(int(player_id))} was removed from {queues_str} for being AFK for more than {removal_data['afk_time']} minutes.", color=0xff0000)
+            embed_msg = discord.Embed(description=f"{player_name_mapping.get(int(player_id))} was removed from {queues_str} for being AFK for more than {removal_data['afk_time']} minutes.", color=discord.Color.red())
             await channel.send(embed=embed_msg)
 
 
@@ -209,6 +261,21 @@ class PugQueueCog(commands.Cog):
         # Save the updated queues to the BSON file
         if player_updated:  # Only save if we made an update
             save_to_bson(current_queues, os.path.join(CACHE_DIR, 'queues.bson'))
+
+    @commands.command()
+    async def setofflinetime(self, ctx, minutes: float = None):
+        """Set the offline time limit for the current channel."""
+        if not minutes:
+            await ctx.send("Please provide the number of minutes.")
+            return
+
+        offline_limits = load_offline_limits()
+        offline_limits.setdefault(str(ctx.guild.id), {})[str(ctx.channel.id)] = minutes
+        save_offline_limits(offline_limits)
+
+        embed = discord.Embed(description=f"Offline time limit has been set to {minutes} minutes for {ctx.channel.name}.", color=discord.Color.green())
+        await ctx.send(embed=embed)
+
 
 
     @commands.command()
@@ -275,7 +342,7 @@ class PugQueueCog(commands.Cog):
 
         """Set the AFK time for the current channel"""
         save_afk_time(ctx.guild.id, ctx.channel.id, minutes)
-        embed = discord.Embed(description=f"AFK time has been set to {minutes} minutes for {ctx.channel.name}.", color=0x00ff00)
+        embed = discord.Embed(description=f"AFK time has been set to {minutes} minutes for {ctx.channel.name}.", color=discord.Color.green())
         await ctx.send(embed=embed)
 
 
@@ -435,7 +502,7 @@ class PugQueueCog(commands.Cog):
             return
 
         # Create and send the embed
-        embed = discord.Embed(title="Pug Channel Removed", description=f"This channel ({ctx.channel.name}) has been removed from pug channels.", color=0xff0000)
+        embed = discord.Embed(title="Pug Channel Removed", description=f"This channel ({ctx.channel.name}) has been removed from pug channels.", color=discord.Color.red())
         message = await ctx.send(embed=embed)
 
         # Wait for 10 seconds and then delete the message
@@ -570,7 +637,7 @@ class PugQueueCog(commands.Cog):
         pug_channel_id = current_channels[str(ctx.guild.id)]
         pug_channel = self.bot.get_channel(int(pug_channel_id))
 
-        embed = discord.Embed(title="Pug Settings", description=f"Pug Settings in {ctx.guild.name}", color=0x00ff00)
+        embed = discord.Embed(title="Pug Settings", description=f"Pug Settings in {ctx.guild.name}", color=discord.Color.green())
 
         content = ""
 
@@ -586,6 +653,11 @@ class PugQueueCog(commands.Cog):
             # Add AFK time for the server channel
             afk_time = get_afk_time(ctx.guild.id, ctx.channel.id)
             content += f"**AFK Time:** `{afk_time} minutes`\n"
+
+            # Add offline time limit for the server channel
+            offline_limits = load_offline_limits()
+            offline_limit = offline_limits.get(str(ctx.guild.id), {}).get(str(ctx.channel.id), OFFLINE_LIMIT_MINUTES)
+            content += f"**Offline Time Limit:** `{offline_limit} minutes`\n"
 
             # Add bans in server channel
             bans = load_bans()
@@ -725,21 +797,21 @@ class PugQueueCog(commands.Cog):
 
         # Check if the substituting player is in an ongoing game
         if get_ongoing_game_of_player(substitute_id):
-            embed = discord.Embed(description="You are currently in an ongoing game and cannot substitute for another player.", color=0xff0000)
+            embed = discord.Embed(description="You are currently in an ongoing game and cannot substitute for another player.", color=discord.Color.red())
             await ctx.send(embed=embed)
             return
 
         # Get the user_id of the player to be substituted
         player_to_be_substituted_id = await get_user_id_from_input(ctx, user_input)
         if not player_to_be_substituted_id:
-            embed = discord.Embed(description="Invalid player mentioned or named.", color=0xff0000)
+            embed = discord.Embed(description="Invalid player mentioned or named.", color=discord.Color.red())
             await ctx.send(embed=embed)
             return
 
         # Check if the player to be substituted is in an ongoing game
         ongoing_game_id = get_ongoing_game_of_player(player_to_be_substituted_id)
         if not ongoing_game_id:
-            embed = discord.Embed(description=f"The player {user_input} is not in an ongoing game.", color=0xff0000)
+            embed = discord.Embed(description=f"The player {user_input} is not in an ongoing game.", color=discord.Color.red())
             await ctx.send(embed=embed)
             return
 
@@ -825,7 +897,7 @@ class PugQueueCog(commands.Cog):
         
         save_to_bson(queue_status, os.path.join(DATA_DIR, 'queue_status.bson'))
         
-        embed = discord.Embed(description="Queue has been enabled for this channel.", color=0x00ff00)
+        embed = discord.Embed(description="Queue has been enabled for this channel.", color=discord.Color.green())
         await ctx.send(embed=embed)
 
     @commands.command()
@@ -843,7 +915,7 @@ class PugQueueCog(commands.Cog):
         
         save_to_bson(queue_status, os.path.join(DATA_DIR, 'queue_status.bson'))
         
-        embed = discord.Embed(description="Queue has been disabled for this channel.", color=0xff0000)
+        embed = discord.Embed(description="Queue has been disabled for this channel.", color=discord.Color.red())
         await ctx.send(embed=embed)
 
     @commands.command()
@@ -861,6 +933,9 @@ class PugQueueCog(commands.Cog):
             await ctx.send(embed=embed)
             return
 
+        # Fetch the mapped name or the display name
+        display_name = player_name_mapping.get(user_id) or ctx.guild.get_member(user_id).display_name
+
         # Ban the user
         ban_user(ctx.guild.id, ctx.channel.id, user_id)
         
@@ -868,10 +943,10 @@ class PugQueueCog(commands.Cog):
         current_queues = get_current_queues()
         for queue_name in current_queues[str(ctx.guild.id)][str(ctx.channel.id)]:
             remove_player_from_queue(ctx.guild.id, ctx.channel.id, queue_name, user_id)
-        
+            
         embed = discord.Embed(
             title="",
-            description=f"User `{user_input}` has been banned from joining queues in this channel.",
+            description=f"User `{display_name}` has been banned from joining queues in this channel.",
             color=discord.Color.green()
         )
         await ctx.send(embed=embed)
@@ -892,15 +967,38 @@ class PugQueueCog(commands.Cog):
             await ctx.send(embed=embed)
             return
 
+        # Fetch the mapped name or the display name
+        display_name = player_name_mapping.get(user_id) or ctx.guild.get_member(user_id).display_name
+
         # Unban the user
         unban_user(ctx.guild.id, ctx.channel.id, user_id)
         
         embed = discord.Embed(
             title="",
-            description=f"User `{user_input}` has been unbanned from joining queues in this channel.",
+            description=f"User `{display_name}` has been unbanned from joining queues in this channel.",
             color=discord.Color.green()
         )
         await ctx.send(embed=embed)
+
+    @commands.command()
+    async def ustatus(self, ctx, *, user_input: str):
+        """Get the status of a user based on their username or mention."""
+        
+        user_id = await get_user_id_from_input(ctx, user_input)
+        
+        if not user_id:
+            # The helper function already sends an error message, so just return
+            return
+        
+        # Fetch the member object from the guild
+        member = ctx.guild.get_member(user_id)
+        
+        if not member:
+            await ctx.send(f"Cannot find member with the name or ID {user_input} in this server.")
+            return
+
+        # Send the member's status
+        await ctx.send(f"{member.display_name}'s status is: **{member.status}**.")
 
 
 
@@ -937,7 +1035,6 @@ def store_completed_game(game_id, game):
         completed_games = {}
     
     completed_games[completed_game_id] = game
-    print(completed_games)
     save_to_bson(completed_games, os.path.join(DATA_DIR, 'completed_games.bson'))
 
 
@@ -1051,13 +1148,24 @@ async def get_user_id_from_input(ctx, user_input):
     
     # 4. Do a partial match search
     # Check if a partial name exists in the mapping
-    possible_ids = [k for k, v in player_name_mapping.items() if user_input.lower() in v.lower()]
-    if possible_ids:
-        if len(possible_ids) == 1:  # If only one possible match is found
-            return possible_ids[0]
+    possible_matches = [(k, v) for k, v in player_name_mapping.items() if user_input.lower() in v.lower()]
+    
+    # If only one possible match is found
+    if len(possible_matches) == 1:
+        return possible_matches[0][0]
+    
+    # If multiple matches, prioritize the one that has the closest length to the input string
+    elif possible_matches:
+        closest_match = min(possible_matches, key=lambda item: abs(len(item[1]) - len(user_input)))
+        
+        # Check if there are other matches with the same length
+        same_length_matches = [match for match in possible_matches if len(match[1]) == len(closest_match[1])]
+        
+        if len(same_length_matches) == 1:
+            return closest_match[0]
         else:
-            # Handle multiple partial matches (e.g., send a message to ask user to be more specific)
-            await ctx.send(f"Multiple players found with the name {user_input}. Please be more specific.")
+            names = ', '.join(match[1] for match in same_length_matches)
+            await ctx.send(f"Multiple players found with similar names ({names}). Please be more specific.")
             return None
 
     # If no match is found
@@ -1213,29 +1321,41 @@ def remove_player_from_queue(guild_id, channel_id, queue_name, player_id, reason
 
 
     # Update the log after removing the player
-    player_name = player_name_mapping.get(int(player_id))
+    player_name = player_name_mapping.get(int(player_id), "Unknown")
     key = (int(guild_id), int(channel_id))  # Use integers for the key
-    action = "removed-afk" if reason == "afk" else "removed"
     
+    if reason == "afk":
+        action = "removed-afk"
+    elif reason == "offline_too_long":
+        action = "removed-offline"
+    else:
+        action = "removed"
 
 
     # Append to the existing log or create a new one
     QUEUE_LOG[key] = QUEUE_LOG.get(key, [])
     QUEUE_LOG[key].append((player_name, action, queue_name))
-    
+
     # Limit log size to 10 entries
     QUEUE_LOG[key] = QUEUE_LOG[key][-10:]
-    
 
     return f"Removed from `{queue_name}`."
 
 def generate_queue_embed(guild_id, channel_id, bot):
     current_queues = get_current_queues()
+
     channel_queues = current_queues.get(str(guild_id), {}).get(str(channel_id), {})
 
     # Check if ongoing games file exists
     file_path = os.path.join(CACHE_DIR, 'ongoing_games.bson')
     ongoing_games = load_from_bson(file_path)
+
+    embed = discord.Embed(description=f"", colour=Colour.green())
+
+    # If there are no queues
+    if not channel_queues:
+        embed.add_field(name="QUEUES", value="No queues available.", inline=False)
+        return embed
 
     # Sort the queues based on their size, largest first
     sorted_queues = sorted(channel_queues.items(), key=lambda x: x[1]['size'], reverse=True)
@@ -1318,6 +1438,22 @@ def get_current_queues():
 
 def get_current_pug_channels():
     return load_from_bson(os.path.join(DATA_DIR, 'pug_channel.bson'))
+
+def save_to_offline_cache(data):
+    """Save the data to the offline cache."""
+    save_to_bson(data, OFFLINE_CACHE_FILE)
+
+def load_from_offline_cache():
+    """Load data from the offline cache."""
+    return load_from_bson(OFFLINE_CACHE_FILE)
+
+def save_offline_limits(data):
+    """Save the offline time limits."""
+    save_to_bson(data, OFFLINE_TIME_FILE)
+
+def load_offline_limits():
+    """Load the offline time limits."""
+    return load_from_bson(OFFLINE_TIME_FILE)
 
 def save_afk_time(guild_id, channel_id, minutes):
     afk_times = load_from_bson(AFK_TIMES_FILE)

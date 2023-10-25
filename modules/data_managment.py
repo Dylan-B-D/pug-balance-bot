@@ -78,8 +78,9 @@ def save_to_bson(data, filepath):
         f.write(bson.BSON.encode(data))
 
 def load_from_bson(filepath):
-    """Load data from a BSON file. If the file doesn't exist, return an empty dictionary."""
-    if not os.path.exists(filepath):
+    """Load data from a BSON file. If the file doesn't exist or is empty, return an empty dictionary."""
+    if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
         return {}
     with open(filepath, 'rb') as f:
         return bson.BSON(f.read()).decode()
+
